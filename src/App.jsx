@@ -6,6 +6,17 @@ import { useState, useEffect, useCallback, useRef } from "react";
 const CURRENCIES = ["GBP","USD","AUD","SGD","IDR","CNY"];
 const GOOGLE_CLIENT_ID = "468703441147-16782cttqb9in18ttpkihtconlbdr525.apps.googleusercontent.com";
 const parseJwt = token => { try { return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch { return null; } };
+const AUTH_KEY = 'nw_auth';
+const IDLE_MS = 30 * 60 * 1000;
+const getStoredAuth = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(AUTH_KEY));
+    if (!s || Date.now() - s.lastActive > IDLE_MS) { localStorage.removeItem(AUTH_KEY); return null; }
+    const p = parseJwt(s.credential);
+    if (!p?.exp || p.exp * 1000 <= Date.now()) { localStorage.removeItem(AUTH_KEY); return null; }
+    return s.credential;
+  } catch { return null; }
+};
 const LIQUIDITY_OPTIONS = [
   { value:"liquid",      label:"Liquid",               desc:"Instant access" },
   { value:"near-liquid", label:"Near-Liquid",           desc:"Accessible within ~1 week" },
@@ -208,6 +219,21 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .bar-track{height:6px;background:var(--s3);border-radius:3px;overflow:hidden}
 .bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
 `;
+
+// ─────────────────────────────────────────────────────────────
+//  LOADING
+// ─────────────────────────────────────────────────────────────
+function LoadingPage() {
+  return (
+    <div className="setup">
+      <style>{STYLE}</style>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontFamily:"var(--fd)",fontSize:"1.8rem",color:"var(--gold)",marginBottom:20,letterSpacing:".02em"}}>Net Worth Tracker</div>
+        <div style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)",letterSpacing:".18em",textTransform:"uppercase"}}>Loading…</div>
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 //  SIGN IN
@@ -662,13 +688,14 @@ function MilestonesPage({ milestones, baselineId, displayCurrency, toDisplay, on
 //  ROOT APP
 // ─────────────────────────────────────────────────────────────
 export default function App() {
-  const [idToken, setIdToken] = useState(null);
+  const [idToken, setIdToken] = useState(getStoredAuth);
   const [gsiReady, setGsiReady] = useState(false);
   const tokenRef = useRef(null);
   const hasAutoConnected = useRef(false);
+  const expiryTimerRef = useRef(null);
   const [apiUrl, setApiUrl] = useState(()=>localStorage.getItem("nw_api_url")||"");
   const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
+  const [connecting, setConnecting] = useState(()=>!!(localStorage.getItem("nw_api_url")&&getStoredAuth()));
   const [connectErr, setConnectErr] = useState(null);
   const [page, setPage] = useState("overview");
   const [accounts, setAccounts] = useState([]);
@@ -690,11 +717,16 @@ export default function App() {
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: ({ credential }) => {
+          localStorage.setItem(AUTH_KEY, JSON.stringify({ credential, lastActive: Date.now() }));
           setIdToken(credential);
           const payload = parseJwt(credential);
           if (payload?.exp) {
+            if (expiryTimerRef.current) clearTimeout(expiryTimerRef.current);
             const delay = payload.exp * 1000 - Date.now() - 60_000;
-            setTimeout(() => setIdToken(null), Math.max(delay, 0));
+            expiryTimerRef.current = setTimeout(() => {
+              setIdToken(null);
+              localStorage.removeItem(AUTH_KEY);
+            }, Math.max(delay, 0));
           }
         },
         auto_select: true,
@@ -705,6 +737,27 @@ export default function App() {
     const timer = setInterval(() => { if (window.google?.accounts?.id) { clearInterval(timer); init(); } }, 100);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!idToken) return;
+    const touch = () => {
+      const s = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
+      if (s) localStorage.setItem(AUTH_KEY, JSON.stringify({ ...s, lastActive: Date.now() }));
+    };
+    const events = ['mousemove','keydown','click','touchstart','scroll'];
+    events.forEach(e => window.addEventListener(e, touch, { passive: true }));
+    const idleCheck = setInterval(() => {
+      const s = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
+      if (!s || Date.now() - s.lastActive > IDLE_MS) {
+        localStorage.removeItem(AUTH_KEY);
+        setIdToken(null);
+      }
+    }, 60_000);
+    return () => {
+      events.forEach(e => window.removeEventListener(e, touch));
+      clearInterval(idleCheck);
+    };
+  }, [idToken]);
 
   const showToast = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3000); };
 
@@ -837,15 +890,13 @@ export default function App() {
   };
 
   if (!idToken) return <SignInPage gsiReady={gsiReady}/>;
-
-  if (!connected) {
-    return (
-      <>
-        <style>{STYLE}</style>
-        <SetupScreen onConnect={connect} connecting={connecting} connectErr={connectErr}/>
-      </>
-    );
-  }
+  if (connecting) return <LoadingPage/>;
+  if (!connected) return (
+    <>
+      <style>{STYLE}</style>
+      <SetupScreen onConnect={connect} connecting={connecting} connectErr={connectErr}/>
+    </>
+  );
 
   return (
     <>
