@@ -87,6 +87,20 @@ const latestTs = acc => {
   return [...acc.records].sort((a,b)=>Number(b.ts)-Number(a.ts))[0].ts;
 };
 
+// Balance for an account as of a given timestamp (latest record ≤ ts)
+const balanceAt = (acc, ts) => {
+  const recs = (acc.records||[]).filter(r=>Number(r.ts)<=ts);
+  if (!recs.length) return null;
+  return Number([...recs].sort((a,b)=>Number(b.ts)-Number(a.ts))[0].amount);
+};
+
+// Format a timestamp as a datetime-local input value (YYYY-MM-DDThh:mm)
+const localDatetimeStr = ts => {
+  const d = new Date(ts||Date.now());
+  const p = n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 // ─────────────────────────────────────────────────────────────
 //  CHART HELPERS
 // ─────────────────────────────────────────────────────────────
@@ -197,6 +211,12 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .btn-sm{padding:5px 12px;font-size:.78rem}.btn-xs{padding:3px 9px;font-size:.72rem}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .input{background:var(--s3);border:1px solid var(--border2);color:var(--text);padding:9px 12px;border-radius:var(--r2);font-family:var(--fb);font-size:.88rem;width:100%;outline:none;transition:border .15s}
+.input[type=datetime-local]{color-scheme:dark}
+.backdate-tag{font-size:.6rem;font-family:var(--fm);color:var(--gold);background:rgba(201,169,110,.12);border:1px solid rgba(201,169,110,.3);border-radius:999px;padding:1px 7px;letter-spacing:.06em;text-transform:uppercase}
+.ms-preview{background:var(--s2);border:1px solid var(--border);border-radius:var(--r2);padding:13px 16px;margin-bottom:20px}
+.ms-preview-label{font-family:var(--fm);font-size:.6rem;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:6px}
+.ms-preview-val{font-family:var(--fd);font-size:1.5rem;color:var(--gold);line-height:1.1}
+.ms-preview-sub{font-family:var(--fm);font-size:.68rem;color:var(--muted2);margin-top:4px}
 .input:focus{border-color:var(--gold)}.input::placeholder{color:var(--muted)}
 .sel{appearance:none;background:var(--s3);border:1px solid var(--border2);color:var(--text);padding:9px 12px;border-radius:var(--r2);font-family:var(--fb);font-size:.88rem;width:100%;outline:none;cursor:pointer}
 .sel:focus{border-color:var(--gold)}
@@ -621,8 +641,13 @@ function AccountModal({ initial, onSave, onClose }) {
 // ─────────────────────────────────────────────────────────────
 function RecordModal({ account, onSave, onClose }) {
   const [amount, setAmount] = useState("");
+  const [dateStr, setDateStr] = useState(()=>localDatetimeStr(Date.now()));
   const [showHistory, setShowHistory] = useState(false);
   const records = [...(account.records||[])].sort((a,b)=>Number(b.ts)-Number(a.ts));
+
+  const ts = useMemo(()=>{ const t=new Date(dateStr).getTime(); return isNaN(t)?Date.now():t; },[dateStr]);
+  const isBackdated = ts < Date.now() - 90_000;
+  const nowStr = localDatetimeStr(Date.now());
 
   return (
     <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
@@ -634,9 +659,16 @@ function RecordModal({ account, onSave, onClose }) {
           <div className="label">Balance ({account.currency})</div>
           <input className="input" type="number" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)} autoFocus/>
         </div>
+        <div className="frow">
+          <div className="label" style={{display:"flex",justifyContent:"space-between"}}>
+            <span>Date &amp; Time</span>
+            {isBackdated && <span className="backdate-tag">backdating</span>}
+          </div>
+          <input className="input" type="datetime-local" value={dateStr} max={nowStr} onChange={e=>setDateStr(e.target.value)}/>
+        </div>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginBottom:20}}>
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={()=>{if(amount!=="")onSave(parseFloat(amount))}} disabled={amount===""}>
+          <button className="btn btn-primary" onClick={()=>{if(amount!=="")onSave({amount:parseFloat(amount),ts})}} disabled={amount===""}>
             Record Balance
           </button>
         </div>
@@ -660,9 +692,75 @@ function RecordModal({ account, onSave, onClose }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  SAVE MILESTONE MODAL
+// ─────────────────────────────────────────────────────────────
+function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, onSave, onClose }) {
+  const [label, setLabel] = useState("");
+  const [dateStr, setDateStr] = useState(()=>localDatetimeStr(Date.now()));
+  const nowStr = localDatetimeStr(Date.now());
+
+  const ts = useMemo(()=>{ const t=new Date(dateStr).getTime(); return isNaN(t)?Date.now():t; },[dateStr]);
+  const isBackdated = ts < Date.now() - 90_000;
+
+  // Compute summary at the chosen timestamp
+  const preview = useMemo(()=>{
+    const visible = accounts.filter(a=>!excluded.has(a.id)&&!excluded.has(`cls:${a.class}`));
+    let total=0, assets=0, liabilities=0;
+    const byLiq={}, byRisk={}, byCur={}, byCls={};
+    for (const acc of visible) {
+      const raw = balanceAt(acc, ts);
+      if (raw===null) continue;
+      const conv = toDisplay(raw, acc.currency);
+      const signed = acc.type==="liability" ? -Math.abs(conv) : conv;
+      total+=signed;
+      byLiq[acc.liquidity]=(byLiq[acc.liquidity]||0)+signed;
+      byRisk[acc.risk]=(byRisk[acc.risk]||0)+signed;
+      byCur[acc.currency]=(byCur[acc.currency]||0)+raw;
+      byCls[acc.class]=(byCls[acc.class]||0)+signed;
+      if(acc.type==="asset") assets+=conv; else liabilities+=Math.abs(conv);
+    }
+    return {total,byLiq,byRisk,byCur,byCls,assets,liabilities,currency:displayCurrency};
+  },[accounts, excluded, ts, toDisplay, displayCurrency]);
+
+  return (
+    <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
+      <div className="modal">
+        <div className="modal-title">Save Milestone</div>
+        <button className="modal-close" onClick={onClose}>✕</button>
+        <div className="frow">
+          <div className="label">Label (optional)</div>
+          <input className="input" placeholder="e.g. Year end 2024" value={label} onChange={e=>setLabel(e.target.value)} autoFocus/>
+        </div>
+        <div className="frow">
+          <div className="label" style={{display:"flex",justifyContent:"space-between"}}>
+            <span>Date &amp; Time</span>
+            {isBackdated && <span className="backdate-tag">backdating</span>}
+          </div>
+          <input className="input" type="datetime-local" value={dateStr} max={nowStr} onChange={e=>setDateStr(e.target.value)}/>
+        </div>
+        <div className="ms-preview">
+          <div className="ms-preview-label">Net worth {isBackdated?"at this date":"now"}</div>
+          <div className="ms-preview-val">{fmt(preview.total, displayCurrency)}</div>
+          <div className="ms-preview-sub">
+            Assets {fmt(preview.assets,displayCurrency,true)} · Liabilities {fmt(preview.liabilities,displayCurrency,true)}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={()=>onSave({label,ts,summary:preview})}>
+            Save Milestone
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  OVERVIEW PAGE
 // ─────────────────────────────────────────────────────────────
 function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
+  const [showSaveDlg, setShowSaveDlg] = useState(false);
   const visible = accounts.filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`));
   const hiddenCount = accounts.length - visible.length;
 
@@ -716,7 +814,7 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
       {/* ── Net Worth Trend ── */}
       <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span>Net Worth Trend</span>
-        <button className="btn btn-ghost btn-xs" onClick={()=>onSaveMilestone(s)}>📌 Save Milestone</button>
+        <button className="btn btn-ghost btn-xs" onClick={()=>setShowSaveDlg(true)}>📌 Save Milestone</button>
       </div>
       <div className="card">
         <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay}/>
@@ -824,6 +922,14 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
           </div>
         ))}
       </div>
+
+      {showSaveDlg && (
+        <SaveMilestoneModal
+          accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded}
+          onSave={d=>{onSaveMilestone(d);setShowSaveDlg(false)}}
+          onClose={()=>setShowSaveDlg(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1157,15 +1263,15 @@ export default function App() {
     try { await api.current.call("deleteAccount", {id}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
-  const addRecord = async (accountId, amount) => {
-    const rec={id:uid(),accountId,amount,ts:Date.now()};
+  const addRecord = async (accountId, {amount, ts}) => {
+    const rec={id:uid(),accountId,amount,ts:ts||Date.now()};
     setAccounts(p=>p.map(a=>a.id===accountId?{...a,records:[...(a.records||[]),rec]}:a));
     showToast("Balance recorded");
     try { await api.current.callWithData("addRecord", rec); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
-  const saveMilestone = async (summary) => {
-    const m={id:uid(),ts:Date.now(),label:"",summary:{...summary,currency:displayCurrency}};
+  const saveMilestone = async ({label, ts, summary}) => {
+    const m={id:uid(),ts:ts||Date.now(),label:label||"",summary};
     setMilestones(p=>[...p,m]); showToast("Milestone saved!");
     try { await api.current.callWithData("addMilestone", m); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
