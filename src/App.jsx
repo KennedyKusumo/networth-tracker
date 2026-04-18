@@ -688,17 +688,35 @@ export default function App() {
 
   useEffect(() => {
     if (!connected) return;
+    setRates({}); // clear stale rates immediately on currency change
     const others = CURRENCIES.filter(c=>c!==displayCurrency).join(",");
-    fetch(`https://api.frankfurter.app/latest?from=${displayCurrency}&to=${others}`)
+    // Use frankfurter.dev (newer endpoint). Note: IDR and CNY may not be supported.
+    // We request all desired currencies and gracefully skip any that are unsupported.
+    fetch(`https://api.frankfurter.dev/v1/latest?base=${displayCurrency}`)
       .then(r=>r.json())
-      .then(d=>setRates({...d.rates,[displayCurrency]:1}))
+      .then(d => {
+        // d.rates[X] = "how many X per 1 displayCurrency"
+        // toDisplay(amount, fromCur) = amount / d.rates[fromCur]
+        const available = {...d.rates, [displayCurrency]: 1};
+        setRates(available);
+        const missing = CURRENCIES.filter(c => c !== displayCurrency && !available[c]);
+        if (missing.length > 0) {
+          setRatesError(`No live rate for: ${missing.join(", ")} — shown in native currency`);
+        } else {
+          setRatesError(null);
+        }
+      })
       .catch(()=>setRatesError("Live rates unavailable"));
   }, [displayCurrency, connected]);
 
   const toDisplay = useCallback((amount, fromCur) => {
-    if (fromCur===displayCurrency) return Number(amount);
+    if (fromCur === displayCurrency) return Number(amount);
+    // rates[fromCur] = "how many fromCur per 1 displayCurrency"
+    // so: displayAmount = fromAmount / rates[fromCur]
+    // e.g. rates["IDR"]=16000 means 1 GBP=16000 IDR, so 16000 IDR / 16000 = 1 GBP ✓
     const r = rates[fromCur];
-    return r ? Number(amount)/r : Number(amount);
+    if (!r) return Number(amount); // rate not loaded yet, return as-is
+    return Number(amount) / r;
   }, [rates, displayCurrency]);
 
   const changeDisplayCurrency = async (cur) => {
