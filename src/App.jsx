@@ -224,8 +224,22 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .frow{margin-bottom:14px}
 .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:500px){.fgrid{grid-template-columns:1fr}}
-.acc-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:10px;transition:border-color .2s}
+.acc-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:10px;transition:border-color .2s,box-shadow .2s}
 .acc-card:hover{border-color:var(--border2)}
+.acc-card-click{cursor:pointer}
+.acc-card-click:hover{border-color:var(--gold);box-shadow:0 2px 16px rgba(201,169,110,.08)}
+.hist-summary{display:flex;justify-content:space-between;align-items:flex-start;background:var(--s2);border:1px solid var(--border);border-radius:var(--r2);padding:14px 16px;margin-bottom:16px}
+.hist-summary-label{font-family:var(--fm);font-size:.6rem;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
+.hist-summary-val{font-family:var(--fd);font-size:1.3rem;font-weight:600;line-height:1.1}
+.hist-summary-conv{font-family:var(--fm);font-size:.68rem;color:var(--muted2);margin-top:3px}
+.hist-table-wrap{max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r2);margin-bottom:4px}
+.hist-table-head{display:grid;grid-template-columns:1fr auto auto;gap:12px;padding:7px 12px;background:var(--s3);font-family:var(--fm);font-size:.62rem;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);position:sticky;top:0}
+.hist-row{display:grid;grid-template-columns:1fr auto auto;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border);align-items:center}
+.hist-row:last-child{border-bottom:none}
+.hist-row:hover{background:var(--s2)}
+.hist-date{font-family:var(--fm);font-size:.72rem;color:var(--muted2)}
+.hist-delta{font-family:var(--fm);font-size:.72rem;font-weight:500;text-align:right;min-width:70px}
+.hist-amount{font-family:var(--fm);font-size:.78rem;font-weight:600;text-align:right;min-width:90px}
 .acc-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px}
 .acc-name{font-family:var(--fd);font-size:1.05rem;color:var(--text);font-weight:600}
 .acc-balance{font-family:var(--fm);font-size:1.1rem;color:var(--gold);white-space:nowrap}
@@ -935,12 +949,182 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
 }
 
 // ─────────────────────────────────────────────────────────────
+//  BALANCE CHART  (used inside AccountHistoryModal)
+// ─────────────────────────────────────────────────────────────
+function BalanceChart({ records, currency, isLiability }) {
+  const [tipIdx, setTipIdx] = useState(null);
+  const svgRef = useRef(null);
+  const lc = isLiability ? "#e07070" : "#c9a96e";
+
+  // records already sorted oldest→newest
+  const pts = records.map(r=>({ ts: Number(r.ts), val: Number(r.amount) }));
+  if (pts.length < 2) return (
+    <div className="chart-empty" style={{padding:"20px 0"}}>Add at least two balance entries to see a chart.</div>
+  );
+
+  const W=520, H=140, PAD={l:58,r:14,t:10,b:28};
+  const iW=W-PAD.l-PAD.r, iH=H-PAD.t-PAD.b;
+  const vals=pts.map(p=>p.val);
+  const minV=Math.min(...vals), maxV=Math.max(...vals);
+  const vSpan=(maxV-minV)||Math.abs(minV)||1;
+  const tSpan=pts.at(-1).ts-pts[0].ts||1;
+  const sx=t=>PAD.l+((t-pts[0].ts)/tSpan)*iW;
+  const sy=v=>PAD.t+iH-((v-minV)/vSpan)*iH;
+  const mp=pts.map(p=>({...p,x:sx(p.ts),y:sy(p.val)}));
+  const f=n=>n.toFixed(1);
+  const line=mp.map((p,i)=>`${i?"L":"M"}${f(p.x)},${f(p.y)}`).join(" ");
+  const area=`${line} L${f(mp.at(-1).x)},${f(PAD.t+iH)} L${f(mp[0].x)},${f(PAD.t+iH)} Z`;
+  const yTicks=[0,0.5,1].map(fr=>({v:minV+fr*vSpan,y:sy(minV+fr*vSpan)}));
+
+  const handleMM=e=>{
+    if(!svgRef.current) return;
+    const rect=svgRef.current.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)/rect.width*W;
+    let near=0,nearD=Infinity;
+    mp.forEach((p,i)=>{const d=Math.abs(p.x-mx);if(d<nearD){nearD=d;near=i;}});
+    setTipIdx(near);
+  };
+  const tip=tipIdx!==null?mp[tipIdx]:null;
+
+  return (
+    <div style={{position:"relative"}}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`}
+        style={{width:"100%",display:"block",overflow:"visible",cursor:"crosshair"}}
+        onMouseMove={handleMM} onMouseLeave={()=>setTipIdx(null)}>
+        <defs>
+          <linearGradient id="bgrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={lc} stopOpacity=".2"/>
+            <stop offset="100%" stopColor={lc} stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        {yTicks.map((t,i)=>(
+          <g key={i}>
+            <line x1={PAD.l} y1={t.y} x2={W-PAD.r} y2={t.y} stroke="var(--border)" strokeWidth=".6" strokeDasharray="3 3"/>
+            <text x={PAD.l-6} y={t.y+4} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"8.5px",fill:"var(--muted)"}}>
+              {fmt(t.v,currency,true)}
+            </text>
+          </g>
+        ))}
+        <path d={area} fill="url(#bgrad)"/>
+        <path d={line} fill="none" stroke={lc} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+        {mp.map((p,i)=>(
+          <circle key={i} cx={p.x} cy={p.y} r={tipIdx===i?5:3} fill={lc} stroke="var(--s1)" strokeWidth="1.5"/>
+        ))}
+        {tip&&<line x1={tip.x} y1={PAD.t} x2={tip.x} y2={PAD.t+iH} stroke="var(--border2)" strokeWidth="1" strokeDasharray="3 3"/>}
+        <text x={mp[0].x} y={H-4} textAnchor="start" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+          {new Date(pts[0].ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"})}
+        </text>
+        <text x={mp.at(-1).x} y={H-4} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+          {new Date(pts.at(-1).ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"})}
+        </text>
+      </svg>
+      {tip&&(
+        <div className="chart-tt" style={{left:`${(tip.x/W*100).toFixed(1)}%`}}>
+          <div className="chart-tt-val" style={{color:lc}}>{fmt(tip.val,currency)}</div>
+          <div className="chart-tt-date">{new Date(tip.ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ACCOUNT HISTORY MODAL
+// ─────────────────────────────────────────────────────────────
+function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBalance, onEdit, onClose }) {
+  const isLiability = account.type === "liability";
+  const accentColor = isLiability ? "var(--neg)" : "var(--gold)";
+  const sorted = useMemo(()=>
+    [...(account.records||[])].sort((a,b)=>Number(b.ts)-Number(a.ts))
+  ,[account.records]);
+  const chronological = [...sorted].reverse();
+  const bal = latestBalance(account);
+  const conv = bal!==null ? toDisplay(bal, account.currency) : null;
+  const signed = conv!==null ? (isLiability ? -Math.abs(conv) : conv) : null;
+
+  return (
+    <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
+      <div className="modal" style={{maxWidth:580}}>
+        <button className="modal-close" onClick={onClose}>✕</button>
+
+        {/* Header */}
+        <div style={{marginBottom:14}}>
+          <div className="modal-title" style={{marginBottom:6}}>{account.name}</div>
+          <div className="acc-pills" style={{marginBottom:0}}>
+            <Pill label={CLASS_OPTIONS.find(o=>o.value===account.class)?.label||account.class} color="var(--gold)"/>
+            <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===account.liquidity)?.label||account.liquidity} color={LIQ_COLORS[account.liquidity]||"#6b7280"}/>
+            <Pill label={(RISK_OPTIONS.find(o=>o.value===account.risk)?.label||account.risk)+" risk"} color={RISK_COLORS[account.risk]||"#6b7280"}/>
+            <Pill label={isLiability?"Liability":"Asset"} color={isLiability?"var(--neg)":"var(--teal)"}/>
+          </div>
+        </div>
+
+        {/* Current balance summary */}
+        <div className="hist-summary">
+          <div>
+            <div className="hist-summary-label">Current Balance</div>
+            <div className="hist-summary-val" style={{color:accentColor}}>
+              {bal!==null?fmt(bal,account.currency):"—"}
+            </div>
+            {conv!==null&&account.currency!==displayCurrency&&(
+              <div className="hist-summary-conv">≈ {fmt(signed,displayCurrency)}</div>
+            )}
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div className="hist-summary-label">Records</div>
+            <div className="hist-summary-val">{sorted.length}</div>
+            <div className="hist-summary-conv">{latestTs(account)?"Last: "+new Date(Number(latestTs(account))).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}):"Never updated"}</div>
+          </div>
+        </div>
+
+        {/* Chart */}
+        <div style={{marginBottom:16}}>
+          <BalanceChart records={chronological} currency={account.currency} isLiability={isLiability}/>
+        </div>
+
+        {/* Records table */}
+        {sorted.length>0 && (
+          <div className="hist-table-wrap">
+            <div className="hist-table-head">
+              <span>Date</span>
+              <span style={{textAlign:"right"}}>Change</span>
+              <span style={{textAlign:"right"}}>Balance</span>
+            </div>
+            {sorted.map((r,i)=>{
+              const prev = sorted[i+1]; // older record
+              const delta = prev ? Number(r.amount)-Number(prev.amount) : null;
+              return (
+                <div className="hist-row" key={r.id||i}>
+                  <span className="hist-date">{fmtDate(r.ts)}</span>
+                  <span className={`hist-delta ${delta===null?"neu":delta>0?isLiability?"neg":"pos":delta<0?isLiability?"pos":"neg":"neu"}`}>
+                    {delta===null?"—":( (delta>0?"+":"")+fmt(delta,account.currency,true) )}
+                  </span>
+                  <span className="hist-amount" style={{color:accentColor}}>{fmt(r.amount,account.currency)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {sorted.length===0&&<div className="empty" style={{padding:"24px 0"}}>No balance records yet.</div>}
+
+        {/* Actions */}
+        {account.notes&&<div style={{fontFamily:"var(--fm)",fontSize:".75rem",color:"var(--muted2)",margin:"14px 0 0",fontStyle:"italic"}}>Note: {account.notes}</div>}
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:18,paddingTop:14,borderTop:"1px solid var(--border)"}}>
+          <button className="btn btn-ghost btn-sm" onClick={onEdit}>Edit Account</button>
+          <button className="btn btn-primary btn-sm" onClick={onUpdateBalance}>Update Balance</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  ACCOUNTS PAGE
 // ─────────────────────────────────────────────────────────────
 function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggleExcluded, onAdd, onUpdate, onDelete, onRecord }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const [recording, setRecording] = useState(null);
+  const [viewing, setViewing] = useState(null);
   const [filter, setFilter] = useState("all");
   const filtered = filter==="all" ? accounts : accounts.filter(a=>a.class===filter);
 
@@ -965,7 +1149,7 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
         const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
         const clsExcl = excluded.has(`cls:${acc.class}`);
         return (
-          <div className={`acc-card${isExcl?" excl-card":""}`} key={acc.id}>
+          <div className={`acc-card acc-card-click${isExcl?" excl-card":""}`} key={acc.id} onClick={()=>setViewing(acc)}>
             <div className="acc-top">
               <div>
                 <div className="acc-name">{acc.name}</div>
@@ -992,7 +1176,7 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
                 {latestTs(acc)?"Updated "+fmtDate(latestTs(acc)):"Never updated"}
                 {acc.notes&&<span style={{marginLeft:8,color:"var(--muted)"}}>· {acc.notes}</span>}
               </div>
-              <div className="acc-actions">
+              <div className="acc-actions" onClick={e=>e.stopPropagation()}>
                 <button className="btn btn-ghost btn-xs" onClick={()=>setRecording(acc)}>Update Balance</button>
                 <button className="btn btn-ghost btn-xs" onClick={()=>setEditing(acc)}>Edit</button>
                 {!clsExcl && (
@@ -1010,6 +1194,13 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
       {showAdd&&<AccountModal onSave={d=>{onAdd(d);setShowAdd(false)}} onClose={()=>setShowAdd(false)}/>}
       {editing&&<AccountModal initial={editing} onSave={d=>{onUpdate(editing.id,d);setEditing(null)}} onClose={()=>setEditing(null)}/>}
       {recording&&<RecordModal account={recording} onSave={a=>{onRecord(recording.id,a);setRecording(null)}} onClose={()=>setRecording(null)}/>}
+      {viewing&&<AccountHistoryModal
+        account={accounts.find(a=>a.id===viewing.id)||viewing}
+        displayCurrency={displayCurrency} toDisplay={toDisplay}
+        onUpdateBalance={()=>{setRecording(accounts.find(a=>a.id===viewing.id)||viewing);setViewing(null)}}
+        onEdit={()=>{setEditing(accounts.find(a=>a.id===viewing.id)||viewing);setViewing(null)}}
+        onClose={()=>setViewing(null)}
+      />}
     </div>
   );
 }
