@@ -133,8 +133,19 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .sync-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .sync-dot.ok{background:var(--pos)}.sync-dot.err{background:var(--neg)}.sync-dot.spin{background:var(--gold);animation:blink 1s infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
-.cur-sel{background:var(--s3);border:1px solid var(--border2);color:var(--text);padding:5px 10px;border-radius:var(--r2);font-family:var(--fm);font-size:.75rem;cursor:pointer;outline:none}
-.cur-sel:focus{border-color:var(--gold)}
+.cur-drop{position:relative}
+.cur-btn{background:var(--s3);border:1px solid var(--border2);color:var(--text);padding:5px 12px;border-radius:var(--r2);font-family:var(--fm);font-size:.75rem;cursor:pointer;outline:none;display:flex;align-items:center;gap:6px;transition:border-color .15s}
+.cur-btn:hover,.cur-btn:focus{border-color:var(--gold)}
+.cur-chevron{font-size:.55rem;opacity:.5;transition:transform .15s}
+.cur-btn.open .cur-chevron{transform:rotate(180deg);opacity:.8}
+.cur-menu{position:absolute;right:0;top:calc(100% + 6px);background:var(--s1);border:1px solid var(--border2);border-radius:var(--r2);min-width:200px;z-index:200;box-shadow:0 10px 32px rgba(0,0,0,.5);overflow:hidden}
+.cur-opt{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:none;border:none;border-bottom:1px solid var(--border);color:var(--text);font-family:var(--fm);cursor:pointer;width:100%;text-align:left;gap:12px;transition:background .1s}
+.cur-opt:last-child{border-bottom:none}
+.cur-opt:hover{background:var(--s3)}
+.cur-opt.sel{background:var(--s2)}
+.cur-opt-code{font-size:.78rem;font-weight:600;flex-shrink:0}
+.cur-opt.sel .cur-opt-code{color:var(--gold)}
+.cur-opt-rate{font-size:.62rem;color:var(--muted);text-align:right;line-height:1.3}
 .nav{display:flex;gap:4px;padding:12px 0;overflow-x:auto}.nav::-webkit-scrollbar{height:0}
 .nb{background:none;border:none;color:var(--muted2);font-family:var(--fb);font-size:.85rem;font-weight:500;padding:7px 16px;border-radius:999px;cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
 .nb.on{background:var(--gold);color:#0c0e13;font-weight:600}
@@ -207,9 +218,6 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .step-text{font-size:.85rem;line-height:1.6;color:var(--muted2)}
 .step-text strong{color:var(--text)}.step-text a{color:var(--gold);text-decoration:none}.step-text a:hover{text-decoration:underline}
 .step-text code{background:var(--s3);padding:1px 6px;border-radius:4px;font-family:var(--fm);font-size:.8rem;color:var(--text)}
-.rates-bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.rate-chip{background:var(--s2);border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-family:var(--fm);font-size:.65rem;color:var(--muted2)}
-.rate-chip strong{color:var(--text)}
 .empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:.9rem}
 .empty-icon{font-size:2rem;margin-bottom:10px;opacity:.4}
 .rec-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-family:var(--fm);font-size:.75rem}
@@ -311,6 +319,40 @@ function Pill({label, color}) {
     <span className="pill" style={{color,borderColor:color+"44",background:color+"11"}}>
       {label}
     </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CURRENCY DROPDOWN
+// ─────────────────────────────────────────────────────────────
+function CurrencyDropdown({ currencies, value, rates, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+  return (
+    <div className="cur-drop" ref={ref}>
+      <button className={`cur-btn${open?" open":""}`} onClick={() => setOpen(o => !o)}>
+        {value} <span className="cur-chevron">▾</span>
+      </button>
+      {open && (
+        <div className="cur-menu">
+          {currencies.map(c => {
+            const r = rates[c];
+            const rateLabel = c !== value && r ? `1 ${value} = ${r.toFixed(c === "IDR" ? 0 : 4)} ${c}` : c === value ? "Current" : "Rate unavailable";
+            return (
+              <button key={c} className={`cur-opt${c === value ? " sel" : ""}`} onClick={() => { onChange(c); setOpen(false); }}>
+                <span className="cur-opt-code">{c}</span>
+                <span className="cur-opt-rate">{rateLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -425,7 +467,7 @@ function RecordModal({ account, onSave, onClose }) {
 // ─────────────────────────────────────────────────────────────
 //  OVERVIEW PAGE
 // ─────────────────────────────────────────────────────────────
-function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, ratesError, toDisplay, onSaveMilestone }) {
+function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, onSaveMilestone }) {
   const s = (() => {
     let total=0, assets=0, liabilities=0;
     const byLiq={}, byRisk={}, byCur={}, byCls={};
@@ -453,15 +495,6 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
 
   return (
     <div className="page">
-      {Object.keys(rates).length>1 && (
-        <div className="rates-bar">
-          {CURRENCIES.filter(c=>c!==displayCurrency).map(c=>
-            rates[c] ? <div className="rate-chip" key={c}>1 {displayCurrency} = <strong>{rates[c]?.toFixed(c==="IDR"?0:4)} {c}</strong></div> : null
-          )}
-          {ratesError && <div className="rate-chip" style={{color:"var(--neg)"}}>{ratesError}</div>}
-        </div>
-      )}
-
       <div className="hero">
         <div className="hero-label">Total Net Worth</div>
         <div className="hero-value">{fmt(s.total, displayCurrency)}</div>
@@ -913,9 +946,7 @@ export default function App() {
               {syncing?"Syncing…":syncErr?"Sync error":lastSync?"Synced "+fmtDate(lastSync):"Connected"}
             </div>
             <button className="btn btn-ghost btn-xs" onClick={loadAll} disabled={syncing} title="Refresh data">↻</button>
-            <select className="cur-sel" value={displayCurrency} onChange={e=>changeDisplayCurrency(e.target.value)}>
-              {CURRENCIES.map(c=><option key={c}>{c}</option>)}
-            </select>
+            <CurrencyDropdown currencies={CURRENCIES} value={displayCurrency} rates={rates} onChange={changeDisplayCurrency} />
           </div>
         </div>
 
@@ -925,7 +956,7 @@ export default function App() {
           ))}
         </div>
 
-        {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} ratesError={ratesError} toDisplay={toDisplay} onSaveMilestone={saveMilestone}/>}
+        {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} onSaveMilestone={saveMilestone}/>}
         {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord}/>}
         {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
       </div>
