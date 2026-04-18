@@ -78,22 +78,19 @@ const latestTs = acc => {
 //  GOOGLE SHEETS API
 // ─────────────────────────────────────────────────────────────
 const createApi = (url) => ({
-  get: async (action, params={}) => {
-    const qs = new URLSearchParams({action,...params}).toString();
+  call: async (action, params={}) => {
+    const qs = new URLSearchParams({action, ...params}).toString();
     const res = await fetch(`${url}?${qs}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     return data;
   },
-  post: async (body) => {
-    const res = await fetch(url, {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
+  callWithData: async (action, data, extra={}) => {
+    const qs = new URLSearchParams({action, data: JSON.stringify(data), ...extra}).toString();
+    const res = await fetch(`${url}?${qs}`);
+    const json = await res.json();
+    if (json.error) throw new Error(json.error);
+    return json;
   },
 });
 
@@ -657,7 +654,7 @@ export default function App() {
   const loadAll = useCallback(async () => {
     setSyncing(true); setSyncErr(null);
     try {
-      const data = await api.current.get("getAll");
+      const data = await api.current.call("getAll");
       setAccounts(data.accounts||[]);
       setMilestones(data.milestones||[]);
       setBaselineId(data.baselineId||null);
@@ -672,7 +669,7 @@ export default function App() {
     setConnecting(true); setConnectErr(null);
     try {
       api.current = createApi(url);
-      const data = await api.current.get("getAll");
+      const data = await api.current.call("getAll");
       setAccounts(data.accounts||[]);
       setMilestones(data.milestones||[]);
       setBaselineId(data.baselineId||null);
@@ -706,56 +703,56 @@ export default function App() {
 
   const changeDisplayCurrency = async (cur) => {
     setDisplayCurrency(cur);
-    try { await api.current.post({action:"setSetting",key:"displayCurrency",value:cur}); } catch {}
+    try { await api.current.call("setSetting", {key:"displayCurrency", value:cur}); } catch {}
   };
 
   // CRUD
   const addAccount = async (form) => {
     const acc={id:uid(),...form,createdTs:Date.now(),records:[]};
     setAccounts(p=>[...p,acc]); showToast(`"${acc.name}" added`);
-    try { await api.current.post({action:"addAccount",account:acc}); }
+    try { await api.current.callWithData("addAccount", acc); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const updateAccount = async (id, form) => {
     const acc=accounts.find(a=>a.id===id);
     setAccounts(p=>p.map(a=>a.id===id?{...a,...form}:a)); showToast("Account updated");
-    try { await api.current.post({action:"updateAccount",account:{...acc,...form}}); }
+    try { await api.current.callWithData("updateAccount", {...acc,...form}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const deleteAccount = async (id) => {
     const acc=accounts.find(a=>a.id===id);
     setAccounts(p=>p.filter(a=>a.id!==id)); showToast(`"${acc?.name}" removed`,"warn");
-    try { await api.current.post({action:"deleteAccount",id}); }
+    try { await api.current.call("deleteAccount", {id}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const addRecord = async (accountId, amount) => {
     const rec={id:uid(),accountId,amount,ts:Date.now()};
     setAccounts(p=>p.map(a=>a.id===accountId?{...a,records:[...(a.records||[]),rec]}:a));
     showToast("Balance recorded");
-    try { await api.current.post({action:"addRecord",record:rec}); }
+    try { await api.current.callWithData("addRecord", rec); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const saveMilestone = async (summary) => {
     const m={id:uid(),ts:Date.now(),label:"",summary};
     setMilestones(p=>[...p,m]); showToast("Milestone saved!");
-    try { await api.current.post({action:"addMilestone",milestone:m}); }
+    try { await api.current.callWithData("addMilestone", m); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const deleteMilestone = async (id) => {
     setMilestones(p=>p.filter(m=>m.id!==id));
     if(baselineId===id) setBaselineId(null);
-    try { await api.current.post({action:"deleteMilestone",id}); }
+    try { await api.current.call("deleteMilestone", {id}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const setBaseline = async (id) => {
     setBaselineId(id); showToast(id?"Baseline set":"Baseline cleared");
-    try { await api.current.post({action:"setBaseline",id:id||""}); }
+    try { await api.current.call("setBaseline", {id: id||""}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const updateMilestoneLabel = async (id, label) => {
     const m=milestones.find(m=>m.id===id);
     setMilestones(p=>p.map(x=>x.id===id?{...x,label}:x));
-    try { await api.current.post({action:"updateMilestone",milestone:{...m,label}}); }
+    try { await api.current.callWithData("updateMilestone", {...m,label}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
 
