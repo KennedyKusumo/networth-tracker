@@ -789,7 +789,7 @@ export default function App() {
       setConnected(true);
       setLastSync(Date.now());
     } catch(e) {
-      setConnectErr("Could not connect. Check the URL and that 'Who has access' is set to Anyone.");
+      setConnectErr(e.message || "Could not connect. Check the URL and that 'Who has access' is set to Anyone.");
     }
     setConnecting(false);
   }, []);
