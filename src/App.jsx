@@ -795,6 +795,7 @@ export default function App() {
           <div className="hdr-brand">
             Net Worth Tracker <span>Personal</span>
           </div>
+          <a href="https://github.com/KennedyKusumo/networth-tracker" target="_blank" rel="noreferrer" style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)",textDecoration:"none",letterSpacing:".06em"}} title="View on GitHub">GitHub</a>
           <div className="hdr-right">
             <div className="sync">
               <div className={`sync-dot ${syncing?"spin":syncErr?"err":"ok"}`}/>
