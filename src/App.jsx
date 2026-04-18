@@ -393,7 +393,9 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
   })();
 
   const baseline = milestones.find(m=>m.id===baselineId);
-  const baseTotal = baseline?.summary?.total ?? null;
+  const baseRaw = baseline?.summary?.total ?? null;
+  const baseSavedCur = baseline?.summary?.currency || displayCurrency;
+  const baseTotal = baseRaw!==null ? (baseSavedCur===displayCurrency ? baseRaw : toDisplay(baseRaw, baseSavedCur)) : null;
   const delta = baseTotal!==null ? s.total - baseTotal : null;
   const maxAbs = Math.max(...Object.values(s.byCls).map(v=>Math.abs(v)),1);
 
@@ -570,7 +572,7 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, onAdd, onUpdate, o
 // ─────────────────────────────────────────────────────────────
 //  MILESTONES PAGE
 // ─────────────────────────────────────────────────────────────
-function MilestonesPage({ milestones, baselineId, displayCurrency, onDelete, onSetBaseline, onUpdateLabel }) {
+function MilestonesPage({ milestones, baselineId, displayCurrency, toDisplay, onDelete, onSetBaseline, onUpdateLabel }) {
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState("");
   const sorted = [...milestones].sort((a,b)=>Number(b.ts)-Number(a.ts));
@@ -586,6 +588,8 @@ function MilestonesPage({ milestones, baselineId, displayCurrency, onDelete, onS
       {sorted.map(m=>{
         const isBase=m.id===baselineId;
         const s=m.summary||{};
+        const savedCur=s.currency||displayCurrency;
+        const conv=v=>savedCur===displayCurrency?v:toDisplay(v,savedCur);
         return (
           <div className={`ms-card ${isBase?"baseline":""}`} key={m.id}>
             {isBase&&<div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--gold)",letterSpacing:".12em",textTransform:"uppercase",marginBottom:6}}>★ Baseline</div>}
@@ -604,13 +608,13 @@ function MilestonesPage({ milestones, baselineId, displayCurrency, onDelete, onS
                 )}
                 <div className="ms-ts">{fmtDate(m.ts)}</div>
               </div>
-              <div className="ms-total">{fmt(s.total,displayCurrency)}</div>
+              <div className="ms-total">{fmt(conv(s.total),displayCurrency)}</div>
             </div>
             {s.byLiq&&(
               <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
                 {Object.entries(s.byLiq).map(([k,v])=>(
                   <span key={k} style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
-                    {LIQUIDITY_OPTIONS.find(o=>o.value===k)?.label}: {fmt(v,displayCurrency,true)}
+                    {LIQUIDITY_OPTIONS.find(o=>o.value===k)?.label}: {fmt(conv(v),displayCurrency,true)}
                   </span>
                 ))}
               </div>
@@ -751,7 +755,7 @@ export default function App() {
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const saveMilestone = async (summary) => {
-    const m={id:uid(),ts:Date.now(),label:"",summary};
+    const m={id:uid(),ts:Date.now(),label:"",summary:{...summary,currency:displayCurrency}};
     setMilestones(p=>[...p,m]); showToast("Milestone saved!");
     try { await api.current.callWithData("addMilestone", m); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
@@ -811,7 +815,7 @@ export default function App() {
 
         {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} ratesError={ratesError} toDisplay={toDisplay} onSaveMilestone={saveMilestone}/>}
         {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord}/>}
-        {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
+        {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
       </div>
 
       {toast&&<div className={`toast ${toast.type==="warn"?"warn":toast.type==="err"?"err":""}`}>{toast.msg}</div>}
