@@ -890,7 +890,7 @@ export default function App() {
   };
 
   if (!idToken) return <SignInPage gsiReady={gsiReady}/>;
-  if (connecting) return <LoadingPage/>;
+  if (connecting || (apiUrl && !connected && !connectErr)) return <LoadingPage/>;
   if (!connected) return (
     <>
       <style>{STYLE}</style>
