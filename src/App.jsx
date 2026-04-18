@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 //  CONSTANTS
 // ─────────────────────────────────────────────────────────────
 const CURRENCIES = ["GBP","USD","AUD","SGD","IDR","CNY"];
+const GOOGLE_CLIENT_ID = "REPLACE_WITH_YOUR_CLIENT_ID.apps.googleusercontent.com";
+const parseJwt = token => { try { return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch { return null; } };
 const LIQUIDITY_OPTIONS = [
   { value:"liquid",      label:"Liquid",               desc:"Instant access" },
   { value:"near-liquid", label:"Near-Liquid",           desc:"Accessible within ~1 week" },
@@ -77,16 +79,16 @@ const latestTs = acc => {
 // ─────────────────────────────────────────────────────────────
 //  GOOGLE SHEETS API
 // ─────────────────────────────────────────────────────────────
-const createApi = (url) => ({
+const createApi = (url, getToken) => ({
   call: async (action, params={}) => {
-    const qs = new URLSearchParams({action, ...params}).toString();
+    const qs = new URLSearchParams({action, idToken: getToken?.() || '', ...params}).toString();
     const res = await fetch(`${url}?${qs}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     return data;
   },
   callWithData: async (action, data, extra={}) => {
-    const qs = new URLSearchParams({action, data: JSON.stringify(data), ...extra}).toString();
+    const qs = new URLSearchParams({action, idToken: getToken?.() || '', data: JSON.stringify(data), ...extra}).toString();
     const res = await fetch(`${url}?${qs}`);
     const json = await res.json();
     if (json.error) throw new Error(json.error);
@@ -206,6 +208,30 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .bar-track{height:6px;background:var(--s3);border-radius:3px;overflow:hidden}
 .bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
 `;
+
+// ─────────────────────────────────────────────────────────────
+//  SIGN IN
+// ─────────────────────────────────────────────────────────────
+function SignInPage({ gsiReady }) {
+  const btnRef = useRef(null);
+  useEffect(() => {
+    if (!gsiReady || !btnRef.current) return;
+    window.google.accounts.id.renderButton(btnRef.current, { theme:"outline", size:"large", shape:"pill", text:"signin_with" });
+    window.google.accounts.id.prompt();
+  }, [gsiReady]);
+  return (
+    <div className="setup">
+      <style>{STYLE}</style>
+      <div className="setup-card" style={{textAlign:"center"}}>
+        <div className="setup-title">Net Worth Tracker</div>
+        <div className="setup-sub">Sign in with an authorised Google account to continue.</div>
+        {gsiReady
+          ? <div ref={btnRef} style={{display:"flex",justifyContent:"center",marginTop:20}}/>
+          : <div style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".8rem",marginTop:20}}>Loading…</div>}
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 //  SETUP SCREEN
@@ -636,6 +662,10 @@ function MilestonesPage({ milestones, baselineId, displayCurrency, toDisplay, on
 //  ROOT APP
 // ─────────────────────────────────────────────────────────────
 export default function App() {
+  const [idToken, setIdToken] = useState(null);
+  const [gsiReady, setGsiReady] = useState(false);
+  const tokenRef = useRef(null);
+  const hasAutoConnected = useRef(false);
   const [apiUrl, setApiUrl] = useState(()=>localStorage.getItem("nw_api_url")||"");
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -652,6 +682,29 @@ export default function App() {
   const [lastSync, setLastSync] = useState(null);
   const [toast, setToast] = useState(null);
   const api = useRef(null);
+
+  useEffect(() => { tokenRef.current = idToken; }, [idToken]);
+
+  useEffect(() => {
+    const init = () => {
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: ({ credential }) => {
+          setIdToken(credential);
+          const payload = parseJwt(credential);
+          if (payload?.exp) {
+            const delay = payload.exp * 1000 - Date.now() - 60_000;
+            setTimeout(() => setIdToken(null), Math.max(delay, 0));
+          }
+        },
+        auto_select: true,
+      });
+      setGsiReady(true);
+    };
+    if (window.google?.accounts?.id) { init(); return; }
+    const timer = setInterval(() => { if (window.google?.accounts?.id) { clearInterval(timer); init(); } }, 100);
+    return () => clearInterval(timer);
+  }, []);
 
   const showToast = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3000); };
 
@@ -672,7 +725,7 @@ export default function App() {
     if (!url) return;
     setConnecting(true); setConnectErr(null);
     try {
-      api.current = createApi(url);
+      api.current = createApi(url, () => tokenRef.current);
       const data = await api.current.call("getAll");
       setAccounts(data.accounts||[]);
       setMilestones(data.milestones||[]);
@@ -688,7 +741,12 @@ export default function App() {
     setConnecting(false);
   }, []);
 
-  useEffect(() => { if (apiUrl) connect(apiUrl); }, []);
+  useEffect(() => {
+    if (apiUrl && idToken && !hasAutoConnected.current) {
+      hasAutoConnected.current = true;
+      connect(apiUrl);
+    }
+  }, [idToken]);
 
   useEffect(() => {
     if (!connected) return;
@@ -777,6 +835,8 @@ export default function App() {
     try { await api.current.callWithData("updateMilestone", {...m,label}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+
+  if (!idToken) return <SignInPage gsiReady={gsiReady}/>;
 
   if (!connected) {
     return (
