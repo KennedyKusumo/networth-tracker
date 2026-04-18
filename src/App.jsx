@@ -693,7 +693,7 @@ export default function App() {
   const tokenRef = useRef(null);
   const hasAutoConnected = useRef(false);
   const expiryTimerRef = useRef(null);
-  const [apiUrl, setApiUrl] = useState(()=>localStorage.getItem("nw_api_url")||"");
+  const [apiUrl, setApiUrl] = useState(()=>import.meta.env.VITE_API_URL||localStorage.getItem("nw_api_url")||"");
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(()=>!!(localStorage.getItem("nw_api_url")&&getStoredAuth()));
   const [connectErr, setConnectErr] = useState(null);
