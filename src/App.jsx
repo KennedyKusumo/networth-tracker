@@ -194,6 +194,13 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .acc-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .acc-ts{font-family:var(--fm);font-size:.65rem;color:var(--muted)}
 .acc-actions{display:flex;gap:6px}
+.excl-card{opacity:.55}
+.excl-card:hover{opacity:.8}
+.excl-active{color:var(--gold)!important;border-color:var(--gold)!important}
+.excl-row{opacity:.5}
+.excl-btn{background:none;border:1px solid var(--border2);color:var(--muted);font-family:var(--fm);font-size:.6rem;padding:2px 7px;border-radius:999px;cursor:pointer;transition:all .15s;flex-shrink:0}
+.excl-btn:hover{border-color:var(--text);color:var(--text)}
+.excl-tag{font-family:var(--fm);font-size:.62rem;color:var(--muted);font-style:italic}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)}
 .modal{background:var(--s1);border:1px solid var(--border2);border-radius:var(--r);padding:24px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;position:relative}
 .modal-title{font-family:var(--fd);font-size:1.2rem;color:var(--gold);margin-bottom:18px}
@@ -467,11 +474,14 @@ function RecordModal({ account, onSave, onClose }) {
 // ─────────────────────────────────────────────────────────────
 //  OVERVIEW PAGE
 // ─────────────────────────────────────────────────────────────
-function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, onSaveMilestone }) {
+function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
+  const visible = accounts.filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`));
+  const hiddenCount = accounts.length - visible.length;
+
   const s = (() => {
     let total=0, assets=0, liabilities=0;
     const byLiq={}, byRisk={}, byCur={}, byCls={};
-    for (const acc of accounts) {
+    for (const acc of visible) {
       const raw = latestBalance(acc);
       if (raw===null) continue;
       const conv = toDisplay(raw, acc.currency);
@@ -508,6 +518,7 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
           </div>
         )}
         {baseline && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6}}>Baseline: {baseline.label||fmtDate(baseline.ts)}</div>}
+        {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
       </div>
 
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
@@ -517,18 +528,30 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
       <div className="st">By Account Class</div>
       <div className="card">
         {CLASS_OPTIONS.map(opt=>{
-          const val=s.byCls[opt.value];
-          if(val===undefined) return null;
-          const pct=Math.min(Math.abs(val)/maxAbs*100,100);
+          const clsKey = `cls:${opt.value}`;
+          const isExcl = excluded.has(clsKey);
+          const val = s.byCls[opt.value];
+          if (val===undefined && !isExcl) return null;
+          const pct = val!==undefined ? Math.min(Math.abs(val)/maxAbs*100,100) : 0;
           return (
-            <div className="bar-row" key={opt.value}>
+            <div className={`bar-row${isExcl?" excl-row":""}`} key={opt.value}>
               <div className="bar-row-top">
-                <span style={{color:"var(--text)"}}>{opt.label}</span>
-                <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
+                <span style={{color:isExcl?"var(--muted)":"var(--text)"}}>{opt.label}</span>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  {isExcl
+                    ? <span className="excl-tag">hidden</span>
+                    : <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
+                  }
+                  <button className="excl-btn" onClick={()=>onToggleExcluded(clsKey)} title={isExcl?"Show class in overview":"Hide class from overview"}>
+                    {isExcl?"Show":"Hide"}
+                  </button>
+                </div>
               </div>
-              <div className="bar-track">
-                <div className="bar-fill" style={{width:pct+"%",background:val<0?"var(--neg)":"var(--gold)"}}/>
-              </div>
+              {!isExcl && val!==undefined && (
+                <div className="bar-track">
+                  <div className="bar-fill" style={{width:pct+"%",background:val<0?"var(--neg)":"var(--gold)"}}/>
+                </div>
+              )}
             </div>
           );
         })}
@@ -585,7 +608,7 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
 // ─────────────────────────────────────────────────────────────
 //  ACCOUNTS PAGE
 // ─────────────────────────────────────────────────────────────
-function AccountsPage({ accounts, displayCurrency, toDisplay, onAdd, onUpdate, onDelete, onRecord }) {
+function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggleExcluded, onAdd, onUpdate, onDelete, onRecord }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const [recording, setRecording] = useState(null);
@@ -610,8 +633,10 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, onAdd, onUpdate, o
         const bal=latestBalance(acc);
         const conv=bal!==null?toDisplay(bal,acc.currency):null;
         const signed=conv!==null?(acc.type==="liability"?-Math.abs(conv):conv):null;
+        const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
+        const clsExcl = excluded.has(`cls:${acc.class}`);
         return (
-          <div className="acc-card" key={acc.id}>
+          <div className={`acc-card${isExcl?" excl-card":""}`} key={acc.id}>
             <div className="acc-top">
               <div>
                 <div className="acc-name">{acc.name}</div>
@@ -631,6 +656,7 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, onAdd, onUpdate, o
               <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===acc.liquidity)?.label||acc.liquidity} color={LIQ_COLORS[acc.liquidity]||"#6b7280"}/>
               <Pill label={(RISK_OPTIONS.find(o=>o.value===acc.risk)?.label||acc.risk)+" risk"} color={RISK_COLORS[acc.risk]||"#6b7280"}/>
               <Pill label={acc.type==="liability"?"Liability":"Asset"} color={acc.type==="liability"?"var(--neg)":"var(--teal)"}/>
+              {isExcl && <Pill label={clsExcl?"Class hidden":"Hidden from overview"} color="var(--muted)"/>}
             </div>
             <div className="acc-footer">
               <div className="acc-ts">
@@ -640,6 +666,11 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, onAdd, onUpdate, o
               <div className="acc-actions">
                 <button className="btn btn-ghost btn-xs" onClick={()=>setRecording(acc)}>Update Balance</button>
                 <button className="btn btn-ghost btn-xs" onClick={()=>setEditing(acc)}>Edit</button>
+                {!clsExcl && (
+                  <button className={`btn btn-xs ${isExcl?"btn-ghost excl-active":"btn-ghost"}`} onClick={()=>onToggleExcluded(acc.id)} title={isExcl?"Show in overview":"Hide from overview"}>
+                    {isExcl?"Unhide":"Hide"}
+                  </button>
+                )}
                 <button className="btn btn-danger btn-xs" onClick={()=>{if(window.confirm(`Remove "${acc.name}"?`))onDelete(acc.id)}}>✕</button>
               </div>
             </div>
@@ -735,6 +766,7 @@ export default function App() {
   const [milestones, setMilestones] = useState([]);
   const [baselineId, setBaselineId] = useState(null);
   const [displayCurrency, setDisplayCurrency] = useState("GBP");
+  const [excluded, setExcluded] = useState(new Set());
   const [rates, setRates] = useState({});
   const [ratesError, setRatesError] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -802,6 +834,7 @@ export default function App() {
       setMilestones(data.milestones||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
+      if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
       setLastSync(Date.now());
     } catch(e) { setSyncErr(e.message); }
     setSyncing(false);
@@ -817,6 +850,7 @@ export default function App() {
       setMilestones(data.milestones||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
+      if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
       localStorage.setItem("nw_api_url", url);
       setApiUrl(url);
       setConnected(true);
@@ -871,6 +905,15 @@ export default function App() {
     setDisplayCurrency(cur);
     try { await api.current.call("setSetting", {key:"displayCurrency", value:cur}); } catch {}
   };
+
+  const toggleExcluded = useCallback((key) => {
+    setExcluded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      try { api.current.call("setSetting", {key:"excluded", value:[...next]}); } catch {}
+      return next;
+    });
+  }, []);
 
   // CRUD
   const addAccount = async (form) => {
@@ -956,8 +999,8 @@ export default function App() {
           ))}
         </div>
 
-        {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} onSaveMilestone={saveMilestone}/>}
-        {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord}/>}
+        {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone}/>}
+        {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord}/>}
         {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
       </div>
 
