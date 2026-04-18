@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 //  CONSTANTS
 // ─────────────────────────────────────────────────────────────
 const CURRENCIES = ["GBP","USD","AUD","SGD","IDR","CNY"];
-const GOOGLE_CLIENT_ID = "REPLACE_WITH_YOUR_CLIENT_ID.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "468703441147-16782cttqb9in18ttpkihtconlbdr525.apps.googleusercontent.com";
 const parseJwt = token => { try { return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch { return null; } };
 const LIQUIDITY_OPTIONS = [
   { value:"liquid",      label:"Liquid",               desc:"Instant access" },
