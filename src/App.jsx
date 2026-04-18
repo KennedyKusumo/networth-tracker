@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 // ─────────────────────────────────────────────────────────────
 //  CONSTANTS
@@ -85,6 +85,26 @@ const latestBalance = acc => {
 const latestTs = acc => {
   if (!acc.records?.length) return null;
   return [...acc.records].sort((a,b)=>Number(b.ts)-Number(a.ts))[0].ts;
+};
+
+// ─────────────────────────────────────────────────────────────
+//  CHART HELPERS
+// ─────────────────────────────────────────────────────────────
+const CLS_COLORS = {
+  "cash-savings":"#7eb8a4","investments":"#c8a96e",
+  "retirement":"#8ba3c7","property":"#b07eb8","debt":"#e07070",
+};
+
+const polarXY = (cx, cy, r, deg) => {
+  const rad = (deg - 90) * Math.PI / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+};
+const donutArc = (cx, cy, outerR, innerR, s, e) => {
+  const s1=polarXY(cx,cy,outerR,s), e1=polarXY(cx,cy,outerR,e);
+  const s2=polarXY(cx,cy,innerR,e), e2=polarXY(cx,cy,innerR,s);
+  const lg = e-s > 180 ? 1 : 0;
+  const f = n => n.toFixed(2);
+  return `M${f(s1.x)} ${f(s1.y)} A${outerR} ${outerR} 0 ${lg} 1 ${f(e1.x)} ${f(e1.y)} L${f(s2.x)} ${f(s2.y)} A${innerR} ${innerR} 0 ${lg} 0 ${f(e2.x)} ${f(e2.y)} Z`;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -194,6 +214,21 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .acc-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .acc-ts{font-family:var(--fm);font-size:.65rem;color:var(--muted)}
 .acc-actions{display:flex;gap:6px}
+.chart-empty{text-align:center;padding:28px 20px;color:var(--muted);font-size:.8rem;font-family:var(--fm);line-height:1.6}
+.chart-tt{position:absolute;transform:translateX(-50%);bottom:26px;background:var(--s2);border:1px solid var(--border2);border-radius:var(--r2);padding:7px 12px;pointer-events:none;white-space:nowrap;z-index:10}
+.chart-tt-val{font-family:var(--fm);font-size:.8rem;font-weight:600}
+.chart-tt-date{font-family:var(--fm);font-size:.62rem;color:var(--muted);margin-top:2px}
+.alloc-grid{display:flex;gap:20px;align-items:flex-start}
+.alloc-bars{flex:1;min-width:0;padding-top:4px}
+@media(max-width:520px){.alloc-grid{flex-direction:column}}
+.donut-wrap{width:176px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:10px}
+.donut-legend{width:100%}
+.donut-leg-row{display:flex;align-items:center;gap:7px;padding:3px 4px;cursor:default;border-radius:4px;transition:background .1s}
+.donut-leg-row.hov{background:var(--s3)}
+.donut-leg-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.donut-leg-label{font-family:var(--fm);font-size:.68rem;color:var(--muted2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.donut-leg-pct{font-family:var(--fm);font-size:.68rem;color:var(--text);font-weight:500}
+.cls-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
 .excl-card{opacity:.55}
 .excl-card:hover{opacity:.8}
 .excl-active{color:var(--gold)!important;border-color:var(--gold)!important}
@@ -326,6 +361,159 @@ function Pill({label, color}) {
     <span className="pill" style={{color,borderColor:color+"44",background:color+"11"}}>
       {label}
     </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  DONUT CHART
+// ─────────────────────────────────────────────────────────────
+function DonutChart({ byCls, displayCurrency }) {
+  const [hov, setHov] = useState(null);
+  const cx=88, cy=88, outerR=70, innerR=46;
+
+  const entries = CLASS_OPTIONS
+    .map(o => ({ ...o, val: byCls[o.value]||0, color: CLS_COLORS[o.value]||"#888" }))
+    .filter(e => e.val > 0);
+  const posTotal = entries.reduce((s,e)=>s+e.val,0);
+
+  if (!posTotal) return <div className="chart-empty">No asset data yet</div>;
+
+  let angle=-90;
+  const segs = entries.map(e => {
+    const sweep = (e.val/posTotal)*360;
+    const gap = entries.length>1 ? 1.2 : 0;
+    const seg = { ...e, sa: angle+gap/2, ea: angle+sweep-gap/2 };
+    angle += sweep;
+    return seg;
+  });
+
+  const active = hov!==null ? segs[hov] : null;
+
+  return (
+    <div className="donut-wrap">
+      <svg viewBox="0 0 176 176" style={{width:"100%",maxWidth:176,display:"block",margin:"0 auto"}}>
+        {segs.map((seg,i)=>(
+          <path key={i} d={donutArc(cx,cy,hov===i?outerR+4:outerR,innerR,seg.sa,seg.ea)}
+            fill={seg.color}
+            style={{opacity:hov!==null&&hov!==i?0.35:1,cursor:"pointer",transition:"all .15s"}}
+            onMouseEnter={()=>setHov(i)} onMouseLeave={()=>setHov(null)}/>
+        ))}
+        <text x={cx} y={cy-10} textAnchor="middle" style={{fontFamily:"var(--fd)",fontSize:"13px",fill:"var(--gold)",fontWeight:600}}>
+          {fmt(active?active.val:posTotal, displayCurrency, true)}
+        </text>
+        <text x={cx} y={cy+5} textAnchor="middle" style={{fontFamily:"var(--fm)",fontSize:"7px",fill:"var(--muted)",letterSpacing:".1em",textTransform:"uppercase"}}>
+          {active?active.label:"Total Assets"}
+        </text>
+        {active&&<text x={cx} y={cy+18} textAnchor="middle" style={{fontFamily:"var(--fm)",fontSize:"9px",fill:"var(--muted2)"}}>
+          {((active.val/posTotal)*100).toFixed(1)}%
+        </text>}
+      </svg>
+      <div className="donut-legend">
+        {segs.map((seg,i)=>(
+          <div key={i} className={`donut-leg-row${hov===i?" hov":""}`}
+            onMouseEnter={()=>setHov(i)} onMouseLeave={()=>setHov(null)}>
+            <span className="donut-leg-dot" style={{background:seg.color}}/>
+            <span className="donut-leg-label">{seg.label}</span>
+            <span className="donut-leg-pct">{((seg.val/posTotal)*100).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TREND CHART
+// ─────────────────────────────────────────────────────────────
+function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
+  const [tipIdx, setTipIdx] = useState(null);
+  const svgRef = useRef(null);
+
+  const pts = useMemo(() => {
+    const ms = [...milestones]
+      .sort((a,b)=>Number(a.ts)-Number(b.ts))
+      .map(m => {
+        const cur = m.summary?.currency || displayCurrency;
+        const val = cur===displayCurrency ? (m.summary?.total||0) : toDisplay(m.summary?.total||0, cur);
+        return { ts: Number(m.ts), val, label: m.label||null };
+      });
+    return [...ms, { ts: Date.now(), val: currentValue, label: "Now", isNow: true }];
+  }, [milestones, currentValue, displayCurrency, toDisplay]);
+
+  if (pts.length < 2) return (
+    <div className="chart-empty">
+      <div style={{fontSize:"1.4rem",opacity:.3,marginBottom:8}}>📈</div>
+      Save milestones to chart your net worth over time
+    </div>
+  );
+
+  const W=560, H=150, PAD={l:58,r:14,t:12,b:30};
+  const iW=W-PAD.l-PAD.r, iH=H-PAD.t-PAD.b;
+  const vals=pts.map(p=>p.val);
+  const minV=Math.min(...vals), maxV=Math.max(...vals);
+  const vSpan=(maxV-minV)||1, tSpan=pts.at(-1).ts-pts[0].ts||1;
+  const sx=t=>PAD.l+((t-pts[0].ts)/tSpan)*iW;
+  const sy=v=>PAD.t+iH-((v-minV)/vSpan)*iH;
+  const mapped=pts.map(p=>({...p,x:sx(p.ts),y:sy(p.val)}));
+  const f=n=>n.toFixed(1);
+  const linePath=mapped.map((p,i)=>`${i?"L":"M"}${f(p.x)},${f(p.y)}`).join(" ");
+  const areaPath=`${linePath} L${f(mapped.at(-1).x)},${f(PAD.t+iH)} L${f(mapped[0].x)},${f(PAD.t+iH)} Z`;
+  const yTicks=[0,0.5,1].map(frac=>({v:minV+frac*vSpan,y:sy(minV+frac*vSpan)}));
+  const isUp=pts.at(-1).val>=pts[0].val;
+  const lc=isUp?"#c9a96e":"#e07070";
+
+  const handleMM=e=>{
+    if(!svgRef.current) return;
+    const rect=svgRef.current.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)/rect.width*W;
+    let near=0,nearD=Infinity;
+    mapped.forEach((p,i)=>{const d=Math.abs(p.x-mx);if(d<nearD){nearD=d;near=i;}});
+    setTipIdx(near);
+  };
+
+  const tip=tipIdx!==null?mapped[tipIdx]:null;
+
+  return (
+    <div style={{position:"relative"}}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`}
+        style={{width:"100%",display:"block",overflow:"visible",cursor:"crosshair"}}
+        onMouseMove={handleMM} onMouseLeave={()=>setTipIdx(null)}>
+        <defs>
+          <linearGradient id="tgrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={lc} stopOpacity=".22"/>
+            <stop offset="100%" stopColor={lc} stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        {yTicks.map((t,i)=>(
+          <g key={i}>
+            <line x1={PAD.l} y1={t.y} x2={W-PAD.r} y2={t.y} stroke="var(--border)" strokeWidth=".6" strokeDasharray="3 3"/>
+            <text x={PAD.l-6} y={t.y+4} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"8.5px",fill:"var(--muted)"}}>
+              {fmt(t.v,displayCurrency,true)}
+            </text>
+          </g>
+        ))}
+        <path d={areaPath} fill="url(#tgrad)"/>
+        <path d={linePath} fill="none" stroke={lc} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+        {mapped.map((p,i)=>(
+          <circle key={i} cx={p.x} cy={p.y} r={tipIdx===i?5:3.5} fill={lc} stroke="var(--s1)" strokeWidth="1.5"/>
+        ))}
+        {tip&&<line x1={tip.x} y1={PAD.t} x2={tip.x} y2={PAD.t+iH} stroke="var(--border2)" strokeWidth="1" strokeDasharray="3 3"/>}
+        <text x={mapped[0].x} y={H-5} textAnchor="start" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+          {new Date(pts[0].ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"})}
+        </text>
+        <text x={mapped.at(-1).x} y={H-5} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+          Now
+        </text>
+      </svg>
+      {tip&&(
+        <div className="chart-tt" style={{left:`${(tip.x/W*100).toFixed(1)}%`}}>
+          <div className="chart-tt-val" style={{color:lc}}>{fmt(tip.val,displayCurrency)}</div>
+          <div className="chart-tt-date">
+            {tip.isNow?"Now":tip.label||new Date(tip.ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -503,8 +691,12 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
   const delta = baseTotal!==null ? s.total - baseTotal : null;
   const maxAbs = Math.max(...Object.values(s.byCls).map(v=>Math.abs(v)),1);
 
+  const liqMax = Math.max(...Object.values(s.byLiq).map(v=>Math.abs(v)),1);
+  const riskMax = Math.max(...Object.values(s.byRisk).map(v=>Math.abs(v)),1);
+
   return (
     <div className="page">
+      {/* ── Hero ── */}
       <div className="hero">
         <div className="hero-label">Total Net Worth</div>
         <div className="hero-value">{fmt(s.total, displayCurrency)}</div>
@@ -521,76 +713,107 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
         {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
       </div>
 
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16}}>
-        <button className="btn btn-ghost btn-sm" onClick={()=>onSaveMilestone(s)}>📌 Save as Milestone</button>
+      {/* ── Net Worth Trend ── */}
+      <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span>Net Worth Trend</span>
+        <button className="btn btn-ghost btn-xs" onClick={()=>onSaveMilestone(s)}>📌 Save Milestone</button>
       </div>
-
-      <div className="st">By Account Class</div>
       <div className="card">
-        {CLASS_OPTIONS.map(opt=>{
-          const clsKey = `cls:${opt.value}`;
-          const isExcl = excluded.has(clsKey);
-          const val = s.byCls[opt.value];
-          if (val===undefined && !isExcl) return null;
-          const pct = val!==undefined ? Math.min(Math.abs(val)/maxAbs*100,100) : 0;
-          return (
-            <div className={`bar-row${isExcl?" excl-row":""}`} key={opt.value}>
-              <div className="bar-row-top">
-                <span style={{color:isExcl?"var(--muted)":"var(--text)"}}>{opt.label}</span>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  {isExcl
-                    ? <span className="excl-tag">hidden</span>
-                    : <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
-                  }
-                  <button className="excl-btn" onClick={()=>onToggleExcluded(clsKey)} title={isExcl?"Show class in overview":"Hide class from overview"}>
-                    {isExcl?"Show":"Hide"}
-                  </button>
-                </div>
-              </div>
-              {!isExcl && val!==undefined && (
-                <div className="bar-track">
-                  <div className="bar-fill" style={{width:pct+"%",background:val<0?"var(--neg)":"var(--gold)"}}/>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay}/>
       </div>
 
+      {/* ── Allocation ── */}
+      <div className="st">Asset Allocation</div>
+      <div className="card">
+        <div className="alloc-grid">
+          <DonutChart byCls={s.byCls} displayCurrency={displayCurrency}/>
+          <div className="alloc-bars">
+            {CLASS_OPTIONS.map(opt=>{
+              const clsKey=`cls:${opt.value}`;
+              const isExcl=excluded.has(clsKey);
+              const val=s.byCls[opt.value];
+              if(val===undefined&&!isExcl) return null;
+              const pct=val!==undefined?Math.min(Math.abs(val)/maxAbs*100,100):0;
+              return (
+                <div className={`bar-row${isExcl?" excl-row":""}`} key={opt.value}>
+                  <div className="bar-row-top">
+                    <span style={{color:isExcl?"var(--muted)":"var(--text)",display:"flex",alignItems:"center",gap:6}}>
+                      <span className="cls-dot" style={{background:CLS_COLORS[opt.value]||"var(--border2)"}}/>
+                      {opt.label}
+                    </span>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      {isExcl
+                        ? <span className="excl-tag">hidden</span>
+                        : <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
+                      }
+                      <button className="excl-btn" onClick={()=>onToggleExcluded(clsKey)} title={isExcl?"Show":"Hide"}>
+                        {isExcl?"Show":"Hide"}
+                      </button>
+                    </div>
+                  </div>
+                  {!isExcl&&val!==undefined&&(
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{width:pct+"%",background:val<0?"var(--neg)":CLS_COLORS[opt.value]||"var(--gold)"}}/>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ── By Liquidity ── */}
       <div className="st">By Liquidity</div>
       <div className="card">
         {LIQUIDITY_OPTIONS.map(opt=>{
           const val=s.byLiq[opt.value];
           if(val===undefined) return null;
+          const pct=Math.min(Math.abs(val)/liqMax*100,100);
           return (
-            <div className="crow" key={opt.value}>
-              <div className="crow-left">
-                <div className="crow-label">{opt.label}</div>
-                <div className="crow-desc">{opt.desc}</div>
+            <div className="bar-row" key={opt.value}>
+              <div className="bar-row-top">
+                <span style={{color:"var(--text)",display:"flex",alignItems:"center",gap:6}}>
+                  <span className="cls-dot" style={{background:LIQ_COLORS[opt.value]||"var(--border2)"}}/>
+                  {opt.label}
+                  <span style={{color:"var(--muted)",fontSize:".65rem",fontFamily:"var(--fm)"}}>{opt.desc}</span>
+                </span>
+                <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
               </div>
-              <div className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</div>
+              <div className="bar-track">
+                <div className="bar-fill" style={{width:pct+"%",background:LIQ_COLORS[opt.value]||"var(--gold)"}}/>
+              </div>
             </div>
           );
         })}
       </div>
 
+      {/* ── By Risk ── */}
       <div className="st">By Risk Level</div>
       <div className="card">
         {RISK_OPTIONS.map(opt=>{
           const val=s.byRisk[opt.value];
           if(val===undefined) return null;
+          const pct=Math.min(Math.abs(val)/riskMax*100,100);
           return (
-            <div className="crow" key={opt.value}>
-              <div className="crow-left">
-                <div className="crow-label">{opt.label}</div>
-                <div className="crow-desc">{opt.desc}</div>
+            <div className="bar-row" key={opt.value}>
+              <div className="bar-row-top">
+                <span style={{color:"var(--text)",display:"flex",alignItems:"center",gap:6}}>
+                  <span className="cls-dot" style={{background:RISK_COLORS[opt.value]||"var(--border2)"}}/>
+                  {opt.label}
+                  <span style={{color:"var(--muted)",fontSize:".65rem",fontFamily:"var(--fm)"}}>{opt.desc}</span>
+                </span>
+                <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
               </div>
-              <div className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</div>
+              <div className="bar-track">
+                <div className="bar-fill" style={{width:pct+"%",background:RISK_COLORS[opt.value]||"var(--gold)"}}/>
+              </div>
             </div>
           );
         })}
       </div>
 
+      {/* ── By Currency ── */}
       <div className="st">By Currency (native amounts)</div>
       <div className="card">
         {Object.entries(s.byCur).length===0 && <div className="empty">No accounts yet</div>}
