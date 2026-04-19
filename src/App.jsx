@@ -94,6 +94,20 @@ const balanceAt = (acc, ts) => {
   return Number([...recs].sort((a,b)=>Number(b.ts)-Number(a.ts))[0].amount);
 };
 
+// Net worth for visible accounts reconstructed at a past timestamp
+const networthAt = (accounts, excluded, ts, toDisplay) => {
+  let total = 0, hasAny = false;
+  for (const acc of accounts) {
+    if (excluded.has(acc.id) || excluded.has(`cls:${acc.class}`)) continue;
+    const raw = balanceAt(acc, ts);
+    if (raw === null) continue;
+    hasAny = true;
+    const conv = toDisplay(raw, acc.currency);
+    total += acc.type === 'liability' ? -Math.abs(conv) : conv;
+  }
+  return hasAny ? total : null;
+};
+
 // Format a timestamp as a datetime-local input value (YYYY-MM-DDThh:mm)
 const localDatetimeStr = ts => {
   const d = new Date(ts||Date.now());
@@ -761,6 +775,10 @@ function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, on
 // ─────────────────────────────────────────────────────────────
 function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
   const [showSaveDlg, setShowSaveDlg] = useState(false);
+  const [rateUnit, setRateUnit] = useState('ann'); // 'ann' | 'mo' | 'day'
+  const cycleRate = () => setRateUnit(u => u==='ann'?'mo':u==='mo'?'day':'ann');
+  const rateLabel = rateUnit==='ann'?'p.a.':rateUnit==='mo'?'/mo':'/day';
+  const toRate = ann => rateUnit==='ann' ? ann : rateUnit==='mo' ? (1+ann)**(1/12)-1 : (1+ann)**(1/365.25)-1;
   const visible = accounts.filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`));
   const hiddenCount = accounts.length - visible.length;
 
@@ -792,6 +810,42 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
   const liqMax = Math.max(...Object.values(s.byLiq).map(v=>Math.abs(v)),1);
   const riskMax = Math.max(...Object.values(s.byRisk).map(v=>Math.abs(v)),1);
 
+  // Growth rate from baseline (annualised)
+  const growthRate = (() => {
+    if (!baseline || baseTotal===null || baseTotal<=0) return null;
+    const elapsedYears = (Date.now()-Number(baseline.ts))/(365.25*24*3600*1000);
+    if (elapsedYears < 7/365.25) return null;
+    return { ann: (s.total/baseTotal)**(1/elapsedYears)-1, years: elapsedYears };
+  })();
+
+  // Period performance rows
+  const periodRows = useMemo(() => {
+    const now = Date.now();
+    const yearStart = new Date(new Date().getFullYear(),0,1).getTime();
+    const allTs = accounts.flatMap(a=>(a.records||[]).map(r=>Number(r.ts))).filter(Boolean);
+    const allTimeTs = allTs.length ? Math.min(...allTs) : null;
+    const defs = [
+      { label:'1 Month',  fromTs: now-30*86400000 },
+      { label:'3 Months', fromTs: now-91*86400000 },
+      { label:'6 Months', fromTs: now-182*86400000 },
+      { label:'YTD',      fromTs: yearStart },
+      { label:'1 Year',   fromTs: now-365*86400000 },
+      ...(allTimeTs!==null?[{ label:'All Time', fromTs: allTimeTs }]:[]),
+      ...(baseline?[{ label: baseline.label||'Baseline', fromTs: Number(baseline.ts) }]:[]),
+    ];
+    return defs.map(p=>{
+      const startVal = networthAt(accounts, excluded, p.fromTs, toDisplay);
+      if (startVal===null) return null;
+      const change = s.total-startVal;
+      const changePct = startVal!==0 ? (change/Math.abs(startVal))*100 : null;
+      const elapsedYears = (now-p.fromTs)/(365.25*86400000);
+      const annRate = startVal>0 && s.total>0 && elapsedYears>=7/365.25
+        ? (s.total/startVal)**(1/elapsedYears)-1 : null;
+      return { ...p, startVal, change, changePct, annRate };
+    }).filter(Boolean);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, excluded, s.total, toDisplay, baseline]);
+
   return (
     <div className="page">
       {/* ── Hero ── */}
@@ -808,6 +862,17 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
           </div>
         )}
         {baseline && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6}}>Baseline: {baseline.label||fmtDate(baseline.ts)}</div>}
+        {growthRate && (
+          <div style={{marginTop:6,fontSize:".7rem",fontFamily:"var(--fm)",display:"flex",alignItems:"center",gap:6}}>
+            <button onClick={cycleRate} style={{background:"none",border:"none",padding:0,cursor:"pointer",
+              color:growthRate.ann>=0?"var(--pos)":"var(--neg)",fontSize:"inherit",fontFamily:"inherit",fontWeight:600}}>
+              {growthRate.ann>=0?"+":""}{(toRate(growthRate.ann)*100).toFixed(2)}% {rateLabel}
+            </button>
+            <span style={{color:"var(--muted)"}}>·{" "}
+              {growthRate.years>=1?`${growthRate.years.toFixed(1)}y`:`${Math.round(growthRate.years*12)}mo`}
+            </span>
+          </div>
+        )}
         {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
       </div>
 
@@ -819,6 +884,58 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
       <div className="card">
         <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay}/>
       </div>
+
+      {/* ── Period Performance ── */}
+      {periodRows.length>0 && (<>
+        <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>Period Performance</span>
+          <button className="btn btn-ghost btn-xs" onClick={cycleRate}>Rate: {rateLabel}</button>
+        </div>
+        <div className="card" style={{overflowX:"auto"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
+                       borderBottom:"1px solid var(--border)",paddingBottom:6,marginBottom:4}}>
+            {['Period','Start',`Change`,`Rate (${rateLabel})`].map((h,i)=>(
+              <span key={h} style={{fontSize:".6rem",color:"var(--muted)",fontFamily:"var(--fm)",
+                                    letterSpacing:".08em",textTransform:"uppercase",
+                                    textAlign:i>0?"right":"left"}}>{h}</span>
+            ))}
+          </div>
+          {periodRows.map((row,i)=>{
+            const dispRate = row.annRate===null ? null : toRate(row.annRate);
+            return (
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
+                                   alignItems:"center",padding:"6px 0",
+                                   borderBottom:i<periodRows.length-1?"1px solid var(--border)":"none"}}>
+                <div>
+                  <div style={{fontSize:".75rem",color:"var(--text)"}}>{row.label}</div>
+                  <div style={{fontSize:".62rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>
+                    {new Date(row.fromTs).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+                  </div>
+                </div>
+                <div style={{textAlign:"right",fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>
+                  {fmt(row.startVal,displayCurrency,true)}
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:".75rem",fontFamily:"var(--fm)",
+                               color:row.change>=0?"var(--pos)":"var(--neg)"}}>
+                    {row.change>=0?"+":""}{fmt(row.change,displayCurrency,true)}
+                  </div>
+                  {row.changePct!==null&&(
+                    <div style={{fontSize:".62rem",fontFamily:"var(--fm)",
+                                 color:row.change>=0?"var(--pos)":"var(--neg)"}}>
+                      {row.changePct>=0?"+":""}{row.changePct.toFixed(1)}%
+                    </div>
+                  )}
+                </div>
+                <div style={{textAlign:"right",fontFamily:"var(--fm)",fontSize:".75rem",
+                             color:dispRate===null?"var(--muted)":dispRate>=0?"var(--pos)":"var(--neg)"}}>
+                  {dispRate===null?"—":`${dispRate>=0?"+":""}${(dispRate*100).toFixed(2)}%`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>)}
 
       {/* ── Allocation ── */}
       <div className="st">Asset Allocation</div>
