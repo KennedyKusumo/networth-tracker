@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragOverlay } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 // ─────────────────────────────────────────────────────────────
 //  CONSTANTS
@@ -341,6 +344,13 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .vest-progress{background:var(--s2);border:1px solid var(--border);border-radius:var(--r2);padding:8px 12px;margin-bottom:10px}
 .vest-track{height:5px;background:var(--s3);border-radius:3px;overflow:hidden}
 .vest-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--gold),var(--pos));transition:width .5s ease}
+.drag-handle{display:flex;align-items:center;justify-content:center;width:28px;min-height:44px;color:var(--muted);cursor:grab;opacity:0;transition:opacity .15s;touch-action:none;flex-shrink:0;margin-right:6px;border-radius:var(--r2)}
+.drag-handle:active{cursor:grabbing}
+.acc-card:hover .drag-handle{opacity:.5}
+.drag-handle:hover{opacity:1!important;color:var(--muted2)}
+@media(pointer:coarse){.drag-handle{opacity:.35}}
+.acc-card-dragging{opacity:0!important}
+.drag-overlay{box-shadow:0 16px 48px rgba(0,0,0,.7);transform:scale(1.02);border-color:var(--gold)!important}
 `;
 
 // ─────────────────────────────────────────────────────────────
@@ -1370,15 +1380,147 @@ function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBala
 }
 
 // ─────────────────────────────────────────────────────────────
+//  SORTABLE ACCOUNT CARD WRAPPER
+// ─────────────────────────────────────────────────────────────
+function DragHandleIcon() {
+  return (
+    <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor">
+      {[0,1,2,3].flatMap(r=>[0,1].map(c=>(
+        <circle key={`${r}-${c}`} cx={2+c*6} cy={2+r*4} r={1.5}/>
+      )))}
+    </svg>
+  );
+}
+
+function SortableAccountCard({ id, isDragOverlay, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  return (
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={isDragging ? "acc-card-dragging" : ""}>
+      {children(listeners, attributes)}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  ACCOUNTS PAGE
 // ─────────────────────────────────────────────────────────────
-function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggleExcluded, onAdd, onUpdate, onDelete, onRecord }) {
+function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggleExcluded, onAdd, onUpdate, onDelete, onRecord, accountOrder, onReorder }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const [recording, setRecording] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [filter, setFilter] = useState("all");
-  const filtered = filter==="all" ? accounts : accounts.filter(a=>a.class===filter);
+  const [activeId, setActiveId] = useState(null);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  const sorted = useMemo(() => {
+    if (!accountOrder?.length) return accounts;
+    const orderMap = new Map(accountOrder.map((id, i) => [id, i]));
+    return [...accounts].sort((a, b) => (orderMap.get(a.id) ?? Infinity) - (orderMap.get(b.id) ?? Infinity));
+  }, [accounts, accountOrder]);
+
+  const filtered = filter === "all" ? sorted : sorted.filter(a => a.class === filter);
+  const activeAcc = activeId ? accounts.find(a => a.id === activeId) : null;
+
+  const handleDragEnd = ({ active, over }) => {
+    setActiveId(null);
+    if (!over || active.id === over.id) return;
+    const filteredIds = filtered.map(a => a.id);
+    const newFilteredIds = arrayMove(filteredIds, filteredIds.indexOf(active.id), filteredIds.indexOf(over.id));
+    const visibleSet = new Set(filteredIds);
+    const base = accountOrder?.length ? accountOrder : accounts.map(a => a.id);
+    let vi = 0;
+    const newOrder = base.map(id => visibleSet.has(id) ? newFilteredIds[vi++] : id);
+    accounts.forEach(a => { if (!newOrder.includes(a.id)) newOrder.push(a.id); });
+    onReorder(newOrder);
+  };
+
+  const renderCard = (acc, dragListeners, dragAttributes, isOverlay = false) => {
+    const bal = latestBalance(acc);
+    const frac = acc.vesting ? vestedFraction(acc.vesting) : 1;
+    const vestedBal = bal !== null ? (acc.vesting ? bal * frac : bal) : null;
+    const unvestedBal = bal !== null && acc.vesting ? bal * (1 - frac) : null;
+    const conv = vestedBal !== null ? toDisplay(vestedBal, acc.currency) : null;
+    const signed = conv !== null ? (acc.type === "liability" ? -Math.abs(conv) : conv) : null;
+    const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
+    const clsExcl = excluded.has(`cls:${acc.class}`);
+    const vestPct = acc.vesting ? Math.round(frac * 100) : null;
+    const isPrevest = acc.vesting && frac === 0;
+    const isFullyVested = acc.vesting && frac === 1;
+    return (
+      <div className={`acc-card acc-card-click${isExcl ? " excl-card" : ""}${isOverlay ? " drag-overlay" : ""}`}
+        onClick={() => !isOverlay && setViewing(acc)}>
+        <div className="acc-top">
+          <div className="drag-handle" {...dragListeners} {...dragAttributes}
+            onClick={e => e.stopPropagation()} style={{touchAction:"none"}}>
+            <DragHandleIcon />
+          </div>
+          <div style={{flex:1}}>
+            <div className="acc-name">{acc.name}</div>
+            <div style={{fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)",marginTop:2}}>{acc.currency}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div className={`acc-balance ${acc.type === "liability" ? "liability" : ""}`}>
+              {vestedBal !== null ? fmt(vestedBal, acc.currency) : "No balance recorded"}
+            </div>
+            {unvestedBal !== null && unvestedBal > 0 && (
+              <div style={{fontSize:".68rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>+{fmt(unvestedBal, acc.currency)} unvested</div>
+            )}
+            {conv !== null && acc.currency !== displayCurrency && (
+              <div style={{fontSize:".7rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>≈ {fmt(signed, displayCurrency)}</div>
+            )}
+          </div>
+        </div>
+        {acc.vesting && bal !== null && (
+          <div className="vest-progress">
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
+                {isPrevest ? "Pre-cliff" : isFullyVested ? "Fully Vested" : `Vesting · ${vestPct}%`}
+              </span>
+              <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
+                {isFullyVested
+                  ? `Vested ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                  : isPrevest
+                    ? `Cliff ${new Date(Number(acc.vesting.cliffDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                    : `Full vest ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`}
+              </span>
+            </div>
+            <div className="vest-track"><div className="vest-fill" style={{width:`${vestPct}%`}}/></div>
+          </div>
+        )}
+        <div className="acc-pills">
+          <Pill label={CLASS_OPTIONS.find(o=>o.value===acc.class)?.label||acc.class} color="var(--gold)"/>
+          <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===acc.liquidity)?.label||acc.liquidity} color={LIQ_COLORS[acc.liquidity]||"#6b7280"}/>
+          <Pill label={(RISK_OPTIONS.find(o=>o.value===acc.risk)?.label||acc.risk)+" risk"} color={RISK_COLORS[acc.risk]||"#6b7280"}/>
+          <Pill label={acc.type==="liability"?"Liability":"Asset"} color={acc.type==="liability"?"var(--neg)":"var(--teal)"}/>
+          {acc.vesting&&<Pill label={isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`${vestPct}% Vested`} color={isPrevest?"var(--muted)":isFullyVested?"var(--pos)":"var(--gold)"}/>}
+          {isExcl&&<Pill label={clsExcl?"Class hidden":"Hidden from overview"} color="var(--muted)"/>}
+        </div>
+        {!isOverlay && (
+          <div className="acc-footer">
+            <div className="acc-ts">
+              {latestTs(acc) ? "Updated "+fmtDate(latestTs(acc)) : "Never updated"}
+              {acc.notes&&<span style={{marginLeft:8,color:"var(--muted)"}}>· {acc.notes}</span>}
+            </div>
+            <div className="acc-actions" onClick={e=>e.stopPropagation()}>
+              <button className="btn btn-ghost btn-xs" onClick={()=>setRecording(acc)}>Update Balance</button>
+              <button className="btn btn-ghost btn-xs" onClick={()=>setEditing(acc)}>Edit</button>
+              {!clsExcl&&(
+                <button className={`btn btn-xs ${isExcl?"btn-ghost excl-active":"btn-ghost"}`}
+                  onClick={()=>onToggleExcluded(acc.id)}>
+                  {isExcl?"Unhide":"Hide"}
+                </button>
+              )}
+              <button className="btn btn-danger btn-xs"
+                onClick={()=>{if(window.confirm(`Remove "${acc.name}"?`))onDelete(acc.id)}}>✕</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="page">
@@ -1390,88 +1532,23 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
         <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Account</button>
       </div>
 
-      {filtered.length===0 && (
+      {filtered.length===0&&(
         <div className="empty"><div className="empty-icon">🏦</div>No accounts yet. Add one to get started.</div>
       )}
 
-      {filtered.map(acc=>{
-        const bal=latestBalance(acc);
-        const frac=acc.vesting?vestedFraction(acc.vesting):1;
-        const vestedBal=bal!==null?(acc.vesting?bal*frac:bal):null;
-        const unvestedBal=bal!==null&&acc.vesting?bal*(1-frac):null;
-        const conv=vestedBal!==null?toDisplay(vestedBal,acc.currency):null;
-        const signed=conv!==null?(acc.type==="liability"?-Math.abs(conv):conv):null;
-        const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
-        const clsExcl = excluded.has(`cls:${acc.class}`);
-        const vestPct = acc.vesting ? Math.round(frac*100) : null;
-        const isPrevest = acc.vesting && frac === 0;
-        const isFullyVested = acc.vesting && frac === 1;
-        return (
-          <div className={`acc-card acc-card-click${isExcl?" excl-card":""}`} key={acc.id} onClick={()=>setViewing(acc)}>
-            <div className="acc-top">
-              <div>
-                <div className="acc-name">{acc.name}</div>
-                <div style={{fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)",marginTop:2}}>{acc.currency}</div>
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div className={`acc-balance ${acc.type==="liability"?"liability":""}`}>
-                  {vestedBal!==null?fmt(vestedBal,acc.currency):"No balance recorded"}
-                </div>
-                {unvestedBal!==null&&unvestedBal>0&&(
-                  <div style={{fontSize:".68rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>+{fmt(unvestedBal,acc.currency)} unvested</div>
-                )}
-                {conv!==null&&acc.currency!==displayCurrency&&(
-                  <div style={{fontSize:".7rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>≈ {fmt(signed,displayCurrency)}</div>
-                )}
-              </div>
-            </div>
-            {acc.vesting&&bal!==null&&(
-              <div className="vest-progress">
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                  <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
-                    {isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`Vesting · ${vestPct}%`}
-                  </span>
-                  <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
-                    {isFullyVested
-                      ? `Vested ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
-                      : isPrevest
-                        ? `Cliff ${new Date(Number(acc.vesting.cliffDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
-                        : `Full vest ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
-                    }
-                  </span>
-                </div>
-                <div className="vest-track">
-                  <div className="vest-fill" style={{width:`${vestPct}%`}}/>
-                </div>
-              </div>
-            )}
-            <div className="acc-pills">
-              <Pill label={CLASS_OPTIONS.find(o=>o.value===acc.class)?.label||acc.class} color="var(--gold)"/>
-              <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===acc.liquidity)?.label||acc.liquidity} color={LIQ_COLORS[acc.liquidity]||"#6b7280"}/>
-              <Pill label={(RISK_OPTIONS.find(o=>o.value===acc.risk)?.label||acc.risk)+" risk"} color={RISK_COLORS[acc.risk]||"#6b7280"}/>
-              <Pill label={acc.type==="liability"?"Liability":"Asset"} color={acc.type==="liability"?"var(--neg)":"var(--teal)"}/>
-              {acc.vesting&&<Pill label={isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`${vestPct}% Vested`} color={isPrevest?"var(--muted)":isFullyVested?"var(--pos)":"var(--gold)"}/>}
-              {isExcl && <Pill label={clsExcl?"Class hidden":"Hidden from overview"} color="var(--muted)"/>}
-            </div>
-            <div className="acc-footer">
-              <div className="acc-ts">
-                {latestTs(acc)?"Updated "+fmtDate(latestTs(acc)):"Never updated"}
-                {acc.notes&&<span style={{marginLeft:8,color:"var(--muted)"}}>· {acc.notes}</span>}
-              </div>
-              <div className="acc-actions" onClick={e=>e.stopPropagation()}>
-                <button className="btn btn-ghost btn-xs" onClick={()=>setRecording(acc)}>Update Balance</button>
-                <button className="btn btn-ghost btn-xs" onClick={()=>setEditing(acc)}>Edit</button>
-                {!clsExcl && (
-                  <button className={`btn btn-xs ${isExcl?"btn-ghost excl-active":"btn-ghost"}`} onClick={()=>onToggleExcluded(acc.id)} title={isExcl?"Show in overview":"Hide from overview"}>
-                    {isExcl?"Unhide":"Hide"}
-                  </button>
-                )}
-                <button className="btn btn-danger btn-xs" onClick={()=>{if(window.confirm(`Remove "${acc.name}"?`))onDelete(acc.id)}}>✕</button>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+      <DndContext sensors={sensors} collisionDetection={closestCenter}
+        onDragStart={({active})=>setActiveId(active.id)} onDragEnd={handleDragEnd}>
+        <SortableContext items={filtered.map(a=>a.id)} strategy={verticalListSortingStrategy}>
+          {filtered.map(acc=>(
+            <SortableAccountCard key={acc.id} id={acc.id}>
+              {(listeners, attrs) => renderCard(acc, listeners, attrs)}
+            </SortableAccountCard>
+          ))}
+        </SortableContext>
+        <DragOverlay dropAnimation={null}>
+          {activeAcc ? renderCard(activeAcc, null, null, true) : null}
+        </DragOverlay>
+      </DndContext>
 
       {showAdd&&<AccountModal onSave={d=>{onAdd(d);setShowAdd(false)}} onClose={()=>setShowAdd(false)}/>}
       {editing&&<AccountModal initial={editing} onSave={d=>{onUpdate(editing.id,d);setEditing(null)}} onClose={()=>setEditing(null)}/>}
@@ -1567,6 +1644,7 @@ export default function App() {
   const [connectErr, setConnectErr] = useState(null);
   const [page, setPage] = useState("overview");
   const [accounts, setAccounts] = useState([]);
+  const [accountOrder, setAccountOrder] = useState([]);
   const [milestones, setMilestones] = useState([]);
   const [baselineId, setBaselineId] = useState(null);
   const [displayCurrency, setDisplayCurrency] = useState("GBP");
@@ -1643,6 +1721,7 @@ export default function App() {
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
+      if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
       setLastSync(Date.now());
     } catch(e) { setSyncErr(e.message); }
     setSyncing(false);
@@ -1661,6 +1740,7 @@ export default function App() {
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
+      if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
       localStorage.setItem("nw_api_url", url);
       setApiUrl(url);
       setConnected(true);
@@ -1726,6 +1806,12 @@ export default function App() {
   }, []);
 
   // CRUD
+  const reorderAccounts = async (newOrder) => {
+    setAccountOrder(newOrder);
+    try { await api.current.call("setSetting", {key:"accountOrder", value:newOrder}); }
+    catch(e) { showToast("Sync error: "+e.message,"err"); }
+  };
+
   const pushVestingSettings = async () => {
     try { await api.current.call("setSetting", {key:"vestingSchedules", value:JSON.stringify(vestingRef.current)}); } catch {}
   };
@@ -1830,7 +1916,7 @@ export default function App() {
         </div>
 
         {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone}/>}
-        {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord}/>}
+        {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
         {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
       </div>
 
