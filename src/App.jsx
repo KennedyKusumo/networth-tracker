@@ -94,12 +94,38 @@ const balanceAt = (acc, ts) => {
   return Number([...recs].sort((a,b)=>Number(b.ts)-Number(a.ts))[0].amount);
 };
 
+// Vesting helpers
+const dateToStr = ts => ts ? new Date(Number(ts)).toISOString().slice(0,10) : '';
+const strToDateMs = s => s ? new Date(s+'T00:00:00').getTime() : null;
+
+const vestedFraction = (vesting, atTs = Date.now()) => {
+  if (!vesting?.cliffDate || !vesting?.vestByDate) return 1;
+  const cliff = Number(vesting.cliffDate), vestBy = Number(vesting.vestByDate);
+  if (atTs < cliff) return 0;
+  if (atTs >= vestBy) return 1;
+  return (atTs - cliff) / (vestBy - cliff);
+};
+
+const vestedBalance = (acc, atTs = Date.now()) => {
+  const raw = latestBalance(acc);
+  if (raw === null) return null;
+  if (!acc.vesting) return raw;
+  return raw * vestedFraction(acc.vesting, atTs);
+};
+
+const vestedBalanceAt = (acc, ts) => {
+  const raw = balanceAt(acc, ts);
+  if (raw === null) return null;
+  if (!acc.vesting) return raw;
+  return raw * vestedFraction(acc.vesting, ts);
+};
+
 // Net worth for visible accounts reconstructed at a past timestamp
 const networthAt = (accounts, excluded, ts, toDisplay) => {
   let total = 0, hasAny = false;
   for (const acc of accounts) {
     if (excluded.has(acc.id) || excluded.has(`cls:${acc.class}`)) continue;
-    const raw = balanceAt(acc, ts);
+    const raw = vestedBalanceAt(acc, ts);
     if (raw === null) continue;
     hasAny = true;
     const conv = toDisplay(raw, acc.currency);
@@ -312,6 +338,9 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .bar-pct{font-family:var(--fm);font-size:.65rem;color:var(--muted);margin-left:5px}
 .bar-track{height:6px;background:var(--s3);border-radius:3px;overflow:hidden}
 .bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
+.vest-progress{background:var(--s2);border:1px solid var(--border);border-radius:var(--r2);padding:8px 12px;margin-bottom:10px}
+.vest-track{height:5px;background:var(--s3);border-radius:3px;overflow:hidden}
+.vest-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--gold),var(--pos));transition:width .5s ease}
 `;
 
 // ─────────────────────────────────────────────────────────────
@@ -589,9 +618,21 @@ function CurrencyDropdown({ currencies, value, rates, onChange }) {
 //  ACCOUNT MODAL
 // ─────────────────────────────────────────────────────────────
 function AccountModal({ initial, onSave, onClose }) {
-  const empty = { name:"", currency:"GBP", liquidity:"liquid", risk:"very-low", class:"cash-savings", type:"asset", notes:"" };
+  const empty = { name:"", currency:"GBP", liquidity:"liquid", risk:"very-low", class:"cash-savings", type:"asset", notes:"", vesting:null };
   const [form, setForm] = useState(initial || empty);
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const [vestEnabled, setVestEnabled] = useState(!!initial?.vesting);
+  const [vestCliff, setVestCliff] = useState(initial?.vesting?.cliffDate ? dateToStr(initial.vesting.cliffDate) : '');
+  const [vestBy, setVestBy] = useState(initial?.vesting?.vestByDate ? dateToStr(initial.vesting.vestByDate) : '');
+
+  const handleSave = () => {
+    if (!form.name.trim()) return;
+    const vesting = vestEnabled && vestCliff && vestBy
+      ? { cliffDate: strToDateMs(vestCliff), vestByDate: strToDateMs(vestBy) }
+      : null;
+    onSave({ ...form, vesting });
+  };
 
   return (
     <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
@@ -639,9 +680,40 @@ function AccountModal({ initial, onSave, onClose }) {
           <div className="label">Notes (optional)</div>
           <input className="input" placeholder="Any notes…" value={form.notes} onChange={e=>set("notes",e.target.value)}/>
         </div>
+
+        {/* Vesting schedule */}
+        <div className="frow" style={{borderTop:"1px solid var(--border)",paddingTop:14,marginTop:2}}>
+          <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+            <input type="checkbox" checked={vestEnabled} onChange={e=>setVestEnabled(e.target.checked)}
+              style={{accentColor:"var(--gold)",width:15,height:15,cursor:"pointer"}}/>
+            <span style={{fontSize:".82rem",color:"var(--text)",fontWeight:500}}>This account has a vesting schedule</span>
+          </label>
+        </div>
+        {vestEnabled && (
+          <div style={{background:"var(--s2)",border:"1px solid var(--border)",borderRadius:"var(--r2)",padding:"12px 14px",marginBottom:14}}>
+            <div style={{fontSize:".72rem",color:"var(--muted2)",marginBottom:10,lineHeight:1.5,fontFamily:"var(--fm)"}}>
+              Only the vested portion counts toward net worth. Set the total grant value via "Update Balance" as usual.
+            </div>
+            <div className="fgrid">
+              <div className="frow" style={{marginBottom:0}}>
+                <div className="label">Cliff Date</div>
+                <input className="input" type="date" value={vestCliff} onChange={e=>setVestCliff(e.target.value)}
+                  style={{colorScheme:"dark"}}/>
+                <div style={{fontSize:".63rem",color:"var(--muted)",marginTop:3,fontFamily:"var(--fm)"}}>Nothing vests before this date</div>
+              </div>
+              <div className="frow" style={{marginBottom:0}}>
+                <div className="label">Fully Vested By</div>
+                <input className="input" type="date" value={vestBy} onChange={e=>setVestBy(e.target.value)}
+                  style={{colorScheme:"dark"}}/>
+                <div style={{fontSize:".63rem",color:"var(--muted)",marginTop:3,fontFamily:"var(--fm)"}}>100% vested on this date</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={()=>form.name.trim()&&onSave(form)} disabled={!form.name.trim()}>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!form.name.trim()}>
             {initial?"Save Changes":"Add Account"}
           </button>
         </div>
@@ -722,7 +794,7 @@ function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, on
     let total=0, assets=0, liabilities=0;
     const byLiq={}, byRisk={}, byCur={}, byCls={};
     for (const acc of visible) {
-      const raw = balanceAt(acc, ts);
+      const raw = vestedBalanceAt(acc, ts);
       if (raw===null) continue;
       const conv = toDisplay(raw, acc.currency);
       const signed = acc.type==="liability" ? -Math.abs(conv) : conv;
@@ -778,7 +850,11 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
   const [rateUnit, setRateUnit] = useState('ann'); // 'ann' | 'mo' | 'day'
   const cycleRate = () => setRateUnit(u => u==='ann'?'mo':u==='mo'?'day':'ann');
   const rateLabel = rateUnit==='ann'?'p.a.':rateUnit==='mo'?'/mo':'/day';
+  const rateUnitShort = rateUnit==='ann'?'yr':rateUnit==='mo'?'mo':'day';
   const toRate = ann => rateUnit==='ann' ? ann : rateUnit==='mo' ? (1+ann)**(1/12)-1 : (1+ann)**(1/365.25)-1;
+  const [targetRate, setTargetRate] = useState(null); // annual decimal, e.g. 0.05 = 5% p.a.
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [targetInput, setTargetInput] = useState('');
   const visible = accounts.filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`));
   const hiddenCount = accounts.length - visible.length;
 
@@ -786,7 +862,7 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
     let total=0, assets=0, liabilities=0;
     const byLiq={}, byRisk={}, byCur={}, byCls={};
     for (const acc of visible) {
-      const raw = latestBalance(acc);
+      const raw = vestedBalance(acc);
       if (raw===null) continue;
       const conv = toDisplay(raw, acc.currency);
       const signed = acc.type==="liability" ? -Math.abs(conv) : conv;
@@ -854,25 +930,24 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
         <div className="hero-value">{fmt(s.total, displayCurrency)}</div>
         <div className="hero-sub">Assets {fmt(s.assets,displayCurrency,true)} · Liabilities {fmt(s.liabilities,displayCurrency,true)}</div>
         {delta!==null && (
-          <div>
-            <span className={`delta ${delta>=0?"pos":"neg"}`}>
+          <div style={{marginTop:12,display:"flex",alignItems:"center",flexWrap:"wrap",gap:8}}>
+            <span className={`delta ${delta>=0?"pos":"neg"}`} style={{marginTop:0}}>
               {delta>=0?"▲":"▼"} {(delta>=0?"+":"")+fmt(delta,displayCurrency)}
               {baseTotal!==0 ? ` (${((delta/Math.abs(baseTotal))*100).toFixed(1)}%)` : ""} vs baseline
             </span>
+            {growthRate && (<>
+              <button onClick={cycleRate} style={{background:"none",border:"none",padding:0,cursor:"pointer",
+                color:growthRate.ann>=0?"var(--pos)":"var(--neg)",
+                fontSize:".7rem",fontFamily:"var(--fm)",fontWeight:600}}>
+                {growthRate.ann>=0?"+":""}{(toRate(growthRate.ann)*100).toFixed(2)}% {rateLabel}
+              </button>
+              <span style={{color:"var(--muted)",fontSize:".7rem",fontFamily:"var(--fm)"}}>
+                · {growthRate.years>=1?`${growthRate.years.toFixed(1)}y`:`${Math.round(growthRate.years*12)}mo`}
+              </span>
+            </>)}
           </div>
         )}
         {baseline && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6}}>Baseline: {baseline.label||fmtDate(baseline.ts)}</div>}
-        {growthRate && (
-          <div style={{marginTop:6,fontSize:".7rem",fontFamily:"var(--fm)",display:"flex",alignItems:"center",gap:6}}>
-            <button onClick={cycleRate} style={{background:"none",border:"none",padding:0,cursor:"pointer",
-              color:growthRate.ann>=0?"var(--pos)":"var(--neg)",fontSize:"inherit",fontFamily:"inherit",fontWeight:600}}>
-              {growthRate.ann>=0?"+":""}{(toRate(growthRate.ann)*100).toFixed(2)}% {rateLabel}
-            </button>
-            <span style={{color:"var(--muted)"}}>·{" "}
-              {growthRate.years>=1?`${growthRate.years.toFixed(1)}y`:`${Math.round(growthRate.years*12)}mo`}
-            </span>
-          </div>
-        )}
         {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
       </div>
 
@@ -889,12 +964,32 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
       {periodRows.length>0 && (<>
         <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span>Period Performance</span>
-          <button className="btn btn-ghost btn-xs" onClick={cycleRate}>Rate: {rateLabel}</button>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            {editingTarget
+              ? <input autoFocus value={targetInput}
+                  onChange={e=>setTargetInput(e.target.value)}
+                  onKeyDown={e=>{
+                    if(e.key==='Enter'||e.key==='Tab'){const v=parseFloat(targetInput);setTargetRate(isNaN(v)||v<=0?null:v/100);setEditingTarget(false);}
+                    if(e.key==='Escape'){setEditingTarget(false);}
+                  }}
+                  onBlur={()=>{const v=parseFloat(targetInput);setTargetRate(isNaN(v)||v<=0?null:v/100);setEditingTarget(false);}}
+                  placeholder="% p.a. e.g. 5"
+                  style={{width:90,background:"var(--s3)",border:"1px solid var(--gold)",color:"var(--text)",
+                          borderRadius:"var(--r2)",padding:"2px 7px",fontFamily:"var(--fm)",fontSize:".65rem",outline:"none"}}/>
+              : targetRate!==null
+                ? <button className="btn btn-ghost btn-xs" onClick={()=>{setTargetInput((targetRate*100).toFixed(1));setEditingTarget(true);}}>
+                    Target: {(toRate(targetRate)*100).toFixed(2)}% {rateLabel}
+                    <span onClick={e=>{e.stopPropagation();setTargetRate(null);}} style={{marginLeft:5,opacity:.5,fontSize:".75em"}}>✕</span>
+                  </button>
+                : <button className="btn btn-ghost btn-xs" onClick={()=>{setTargetInput('');setEditingTarget(true);}}>Set target</button>
+            }
+            <button className="btn btn-ghost btn-xs" onClick={cycleRate}>£/{rateUnitShort}</button>
+          </div>
         </div>
         <div className="card" style={{overflowX:"auto"}}>
           <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
                        borderBottom:"1px solid var(--border)",paddingBottom:6,marginBottom:4}}>
-            {['Period','Start',`Change`,`Rate (${rateLabel})`].map((h,i)=>(
+            {['Period','From',`Change`,`£/${rateUnitShort}`].map((h,i)=>(
               <span key={h} style={{fontSize:".6rem",color:"var(--muted)",fontFamily:"var(--fm)",
                                     letterSpacing:".08em",textTransform:"uppercase",
                                     textAlign:i>0?"right":"left"}}>{h}</span>
@@ -902,6 +997,12 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
           </div>
           {periodRows.map((row,i)=>{
             const dispRate = row.annRate===null ? null : toRate(row.annRate);
+            const absRate = dispRate!==null ? s.total*dispRate : null;
+            const targetInUnit = targetRate!==null ? toRate(targetRate) : null;
+            const rateColor = dispRate===null ? "var(--muted)"
+              : targetInUnit!==null
+                ? dispRate>=targetInUnit ? "var(--pos)" : "var(--neg)"
+                : dispRate>=0 ? "var(--pos)" : "var(--neg)";
             return (
               <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
                                    alignItems:"center",padding:"6px 0",
@@ -927,9 +1028,8 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
                     </div>
                   )}
                 </div>
-                <div style={{textAlign:"right",fontFamily:"var(--fm)",fontSize:".75rem",
-                             color:dispRate===null?"var(--muted)":dispRate>=0?"var(--pos)":"var(--neg)"}}>
-                  {dispRate===null?"—":`${dispRate>=0?"+":""}${(dispRate*100).toFixed(2)}%`}
+                <div style={{textAlign:"right",fontFamily:"var(--fm)",fontSize:".75rem",color:rateColor}}>
+                  {absRate===null ? "—" : `${absRate>=0?"+":""}${fmt(absRate,displayCurrency,true)}/${rateUnitShort}`}
                 </div>
               </div>
             );
@@ -1147,8 +1247,12 @@ function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBala
   ,[account.records]);
   const chronological = [...sorted].reverse();
   const bal = latestBalance(account);
-  const conv = bal!==null ? toDisplay(bal, account.currency) : null;
+  const frac = account.vesting ? vestedFraction(account.vesting) : 1;
+  const vestedBal = bal!==null ? (account.vesting ? bal*frac : bal) : null;
+  const unvestedBal = bal!==null && account.vesting ? bal*(1-frac) : null;
+  const conv = vestedBal!==null ? toDisplay(vestedBal, account.currency) : null;
   const signed = conv!==null ? (isLiability ? -Math.abs(conv) : conv) : null;
+  const vestPct = account.vesting ? Math.round(frac*100) : null;
 
   return (
     <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
@@ -1163,16 +1267,56 @@ function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBala
             <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===account.liquidity)?.label||account.liquidity} color={LIQ_COLORS[account.liquidity]||"#6b7280"}/>
             <Pill label={(RISK_OPTIONS.find(o=>o.value===account.risk)?.label||account.risk)+" risk"} color={RISK_COLORS[account.risk]||"#6b7280"}/>
             <Pill label={isLiability?"Liability":"Asset"} color={isLiability?"var(--neg)":"var(--teal)"}/>
+            {account.vesting&&<Pill label={frac===0?"Pre-cliff":frac===1?"Fully Vested":`${vestPct}% Vested`} color={frac===0?"var(--muted)":frac===1?"var(--pos)":"var(--gold)"}/>}
           </div>
         </div>
+
+        {/* Vesting section */}
+        {account.vesting && bal!==null && (
+          <div style={{background:"var(--s2)",border:"1px solid var(--border)",borderRadius:"var(--r2)",padding:"14px 16px",marginBottom:14}}>
+            <div style={{fontSize:".6rem",fontFamily:"var(--fm)",letterSpacing:".12em",color:"var(--muted)",textTransform:"uppercase",marginBottom:10}}>Vesting Schedule</div>
+            <div className="vest-track" style={{marginBottom:10}}>
+              <div className="vest-fill" style={{width:`${vestPct}%`}}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+              <div>
+                <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase",marginBottom:3}}>Cliff</div>
+                <div style={{fontSize:".78rem",fontFamily:"var(--fm)",color:"var(--text)"}}>{new Date(Number(account.vesting.cliffDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}</div>
+              </div>
+              <div>
+                <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase",marginBottom:3}}>Full Vest</div>
+                <div style={{fontSize:".78rem",fontFamily:"var(--fm)",color:"var(--text)"}}>{new Date(Number(account.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}</div>
+              </div>
+              <div>
+                <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase",marginBottom:3}}>Vested Today</div>
+                <div style={{fontSize:".78rem",fontFamily:"var(--fm)",color:frac===0?"var(--neg)":frac===1?"var(--pos)":"var(--gold)"}}>{vestPct}%</div>
+              </div>
+            </div>
+            {unvestedBal!==null&&(
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,borderTop:"1px solid var(--border)"}}>
+                <div>
+                  <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase",marginBottom:2}}>Vested (counts toward net worth)</div>
+                  <div style={{fontFamily:"var(--fm)",fontSize:".9rem",color:"var(--pos)"}}>{fmt(vestedBal,account.currency)}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase",marginBottom:2}}>Unvested (contingent)</div>
+                  <div style={{fontFamily:"var(--fm)",fontSize:".9rem",color:"var(--muted2)"}}>{fmt(unvestedBal,account.currency)}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Current balance summary */}
         <div className="hist-summary">
           <div>
-            <div className="hist-summary-label">Current Balance</div>
+            <div className="hist-summary-label">{account.vesting?"Vested Balance":"Current Balance"}</div>
             <div className="hist-summary-val" style={{color:accentColor}}>
-              {bal!==null?fmt(bal,account.currency):"—"}
+              {vestedBal!==null?fmt(vestedBal,account.currency):"—"}
             </div>
+            {unvestedBal!==null&&unvestedBal>0&&(
+              <div className="hist-summary-conv">Total grant: {fmt(bal,account.currency)}</div>
+            )}
             {conv!==null&&account.currency!==displayCurrency&&(
               <div className="hist-summary-conv">≈ {fmt(signed,displayCurrency)}</div>
             )}
@@ -1252,10 +1396,16 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
 
       {filtered.map(acc=>{
         const bal=latestBalance(acc);
-        const conv=bal!==null?toDisplay(bal,acc.currency):null;
+        const frac=acc.vesting?vestedFraction(acc.vesting):1;
+        const vestedBal=bal!==null?(acc.vesting?bal*frac:bal):null;
+        const unvestedBal=bal!==null&&acc.vesting?bal*(1-frac):null;
+        const conv=vestedBal!==null?toDisplay(vestedBal,acc.currency):null;
         const signed=conv!==null?(acc.type==="liability"?-Math.abs(conv):conv):null;
         const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
         const clsExcl = excluded.has(`cls:${acc.class}`);
+        const vestPct = acc.vesting ? Math.round(frac*100) : null;
+        const isPrevest = acc.vesting && frac === 0;
+        const isFullyVested = acc.vesting && frac === 1;
         return (
           <div className={`acc-card acc-card-click${isExcl?" excl-card":""}`} key={acc.id} onClick={()=>setViewing(acc)}>
             <div className="acc-top">
@@ -1265,18 +1415,42 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
               </div>
               <div style={{textAlign:"right"}}>
                 <div className={`acc-balance ${acc.type==="liability"?"liability":""}`}>
-                  {bal!==null?fmt(bal,acc.currency):"No balance recorded"}
+                  {vestedBal!==null?fmt(vestedBal,acc.currency):"No balance recorded"}
                 </div>
+                {unvestedBal!==null&&unvestedBal>0&&(
+                  <div style={{fontSize:".68rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>+{fmt(unvestedBal,acc.currency)} unvested</div>
+                )}
                 {conv!==null&&acc.currency!==displayCurrency&&(
                   <div style={{fontSize:".7rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>≈ {fmt(signed,displayCurrency)}</div>
                 )}
               </div>
             </div>
+            {acc.vesting&&bal!==null&&(
+              <div className="vest-progress">
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
+                    {isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`Vesting · ${vestPct}%`}
+                  </span>
+                  <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
+                    {isFullyVested
+                      ? `Vested ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                      : isPrevest
+                        ? `Cliff ${new Date(Number(acc.vesting.cliffDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                        : `Full vest ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                    }
+                  </span>
+                </div>
+                <div className="vest-track">
+                  <div className="vest-fill" style={{width:`${vestPct}%`}}/>
+                </div>
+              </div>
+            )}
             <div className="acc-pills">
               <Pill label={CLASS_OPTIONS.find(o=>o.value===acc.class)?.label||acc.class} color="var(--gold)"/>
               <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===acc.liquidity)?.label||acc.liquidity} color={LIQ_COLORS[acc.liquidity]||"#6b7280"}/>
               <Pill label={(RISK_OPTIONS.find(o=>o.value===acc.risk)?.label||acc.risk)+" risk"} color={RISK_COLORS[acc.risk]||"#6b7280"}/>
               <Pill label={acc.type==="liability"?"Liability":"Asset"} color={acc.type==="liability"?"var(--neg)":"var(--teal)"}/>
+              {acc.vesting&&<Pill label={isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`${vestPct}% Vested`} color={isPrevest?"var(--muted)":isFullyVested?"var(--pos)":"var(--gold)"}/>}
               {isExcl && <Pill label={clsExcl?"Class hidden":"Hidden from overview"} color="var(--muted)"/>}
             </div>
             <div className="acc-footer">
