@@ -94,6 +94,20 @@ const balanceAt = (acc, ts) => {
   return Number([...recs].sort((a,b)=>Number(b.ts)-Number(a.ts))[0].amount);
 };
 
+// Net worth for visible accounts reconstructed at a past timestamp
+const networthAt = (accounts, excluded, ts, toDisplay) => {
+  let total = 0, hasAny = false;
+  for (const acc of accounts) {
+    if (excluded.has(acc.id) || excluded.has(`cls:${acc.class}`)) continue;
+    const raw = balanceAt(acc, ts);
+    if (raw === null) continue;
+    hasAny = true;
+    const conv = toDisplay(raw, acc.currency);
+    total += acc.type === 'liability' ? -Math.abs(conv) : conv;
+  }
+  return hasAny ? total : null;
+};
+
 // Format a timestamp as a datetime-local input value (YYYY-MM-DDThh:mm)
 const localDatetimeStr = ts => {
   const d = new Date(ts||Date.now());
@@ -252,16 +266,10 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .chart-tt{position:absolute;transform:translateX(-50%);bottom:26px;background:var(--s2);border:1px solid var(--border2);border-radius:var(--r2);padding:7px 12px;pointer-events:none;white-space:nowrap;z-index:10}
 .chart-tt-val{font-family:var(--fm);font-size:.8rem;font-weight:600}
 .chart-tt-date{font-family:var(--fm);font-size:.62rem;color:var(--muted);margin-top:2px}
-.alloc-grid{display:flex;gap:20px;align-items:flex-start}
-.alloc-bars{flex:1;min-width:0;padding-top:4px}
-@media(max-width:520px){.alloc-grid{flex-direction:column}}
-.donut-wrap{width:176px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:10px}
-.donut-legend{width:100%}
-.donut-leg-row{display:flex;align-items:center;gap:7px;padding:3px 4px;cursor:default;border-radius:4px;transition:background .1s}
-.donut-leg-row.hov{background:var(--s3)}
-.donut-leg-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.donut-leg-label{font-family:var(--fm);font-size:.68rem;color:var(--muted2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.donut-leg-pct{font-family:var(--fm);font-size:.68rem;color:var(--text);font-weight:500}
+.alloc-grid{display:flex;gap:24px;align-items:center}
+.alloc-bars{flex:1;min-width:0}
+@media(max-width:640px){.alloc-grid{flex-direction:column;align-items:stretch}.donut-wrap{width:100%;max-width:200px;margin:0 auto}}
+.donut-wrap{width:180px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:0}
 .cls-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
 .excl-card{opacity:.55}
 .excl-card:hover{opacity:.8}
@@ -298,8 +306,10 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .empty-icon{font-size:2rem;margin-bottom:10px;opacity:.4}
 .rec-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-family:var(--fm);font-size:.75rem}
 .rec-row:last-child{border-bottom:none}
-.bar-row{margin-bottom:10px}
-.bar-row-top{display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:4px}
+.bar-row{margin-bottom:12px}
+.bar-row:last-child{margin-bottom:0}
+.bar-row-top{display:flex;justify-content:space-between;align-items:center;font-size:.78rem;margin-bottom:5px}
+.bar-pct{font-family:var(--fm);font-size:.65rem;color:var(--muted);margin-left:5px}
 .bar-track{height:6px;background:var(--s3);border-radius:3px;overflow:hidden}
 .bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
 `;
@@ -425,7 +435,7 @@ function DonutChart({ byCls, displayCurrency }) {
 
   return (
     <div className="donut-wrap">
-      <svg viewBox="0 0 176 176" style={{width:"100%",maxWidth:176,display:"block",margin:"0 auto"}}>
+      <svg viewBox="0 0 176 176" style={{width:"100%",maxWidth:180,display:"block",margin:"0 auto"}}>
         {segs.map((seg,i)=>(
           <path key={i} d={donutArc(cx,cy,hov===i?outerR+4:outerR,innerR,seg.sa,seg.ea)}
             fill={seg.color}
@@ -442,16 +452,6 @@ function DonutChart({ byCls, displayCurrency }) {
           {((active.val/posTotal)*100).toFixed(1)}%
         </text>}
       </svg>
-      <div className="donut-legend">
-        {segs.map((seg,i)=>(
-          <div key={i} className={`donut-leg-row${hov===i?" hov":""}`}
-            onMouseEnter={()=>setHov(i)} onMouseLeave={()=>setHov(null)}>
-            <span className="donut-leg-dot" style={{background:seg.color}}/>
-            <span className="donut-leg-label">{seg.label}</span>
-            <span className="donut-leg-pct">{((seg.val/posTotal)*100).toFixed(1)}%</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -775,6 +775,10 @@ function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, on
 // ─────────────────────────────────────────────────────────────
 function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
   const [showSaveDlg, setShowSaveDlg] = useState(false);
+  const [rateUnit, setRateUnit] = useState('ann'); // 'ann' | 'mo' | 'day'
+  const cycleRate = () => setRateUnit(u => u==='ann'?'mo':u==='mo'?'day':'ann');
+  const rateLabel = rateUnit==='ann'?'p.a.':rateUnit==='mo'?'/mo':'/day';
+  const toRate = ann => rateUnit==='ann' ? ann : rateUnit==='mo' ? (1+ann)**(1/12)-1 : (1+ann)**(1/365.25)-1;
   const visible = accounts.filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`));
   const hiddenCount = accounts.length - visible.length;
 
@@ -806,6 +810,42 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
   const liqMax = Math.max(...Object.values(s.byLiq).map(v=>Math.abs(v)),1);
   const riskMax = Math.max(...Object.values(s.byRisk).map(v=>Math.abs(v)),1);
 
+  // Growth rate from baseline (annualised)
+  const growthRate = (() => {
+    if (!baseline || baseTotal===null || baseTotal<=0) return null;
+    const elapsedYears = (Date.now()-Number(baseline.ts))/(365.25*24*3600*1000);
+    if (elapsedYears < 7/365.25) return null;
+    return { ann: (s.total/baseTotal)**(1/elapsedYears)-1, years: elapsedYears };
+  })();
+
+  // Period performance rows
+  const periodRows = useMemo(() => {
+    const now = Date.now();
+    const yearStart = new Date(new Date().getFullYear(),0,1).getTime();
+    const allTs = accounts.flatMap(a=>(a.records||[]).map(r=>Number(r.ts))).filter(Boolean);
+    const allTimeTs = allTs.length ? Math.min(...allTs) : null;
+    const defs = [
+      { label:'1 Month',  fromTs: now-30*86400000 },
+      { label:'3 Months', fromTs: now-91*86400000 },
+      { label:'6 Months', fromTs: now-182*86400000 },
+      { label:'YTD',      fromTs: yearStart },
+      { label:'1 Year',   fromTs: now-365*86400000 },
+      ...(allTimeTs!==null?[{ label:'All Time', fromTs: allTimeTs }]:[]),
+      ...(baseline?[{ label: baseline.label||'Baseline', fromTs: Number(baseline.ts) }]:[]),
+    ];
+    return defs.map(p=>{
+      const startVal = networthAt(accounts, excluded, p.fromTs, toDisplay);
+      if (startVal===null) return null;
+      const change = s.total-startVal;
+      const changePct = startVal!==0 ? (change/Math.abs(startVal))*100 : null;
+      const elapsedYears = (now-p.fromTs)/(365.25*86400000);
+      const annRate = startVal>0 && s.total>0 && elapsedYears>=7/365.25
+        ? (s.total/startVal)**(1/elapsedYears)-1 : null;
+      return { ...p, startVal, change, changePct, annRate };
+    }).filter(Boolean);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, excluded, s.total, toDisplay, baseline]);
+
   return (
     <div className="page">
       {/* ── Hero ── */}
@@ -822,6 +862,17 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
           </div>
         )}
         {baseline && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6}}>Baseline: {baseline.label||fmtDate(baseline.ts)}</div>}
+        {growthRate && (
+          <div style={{marginTop:6,fontSize:".7rem",fontFamily:"var(--fm)",display:"flex",alignItems:"center",gap:6}}>
+            <button onClick={cycleRate} style={{background:"none",border:"none",padding:0,cursor:"pointer",
+              color:growthRate.ann>=0?"var(--pos)":"var(--neg)",fontSize:"inherit",fontFamily:"inherit",fontWeight:600}}>
+              {growthRate.ann>=0?"+":""}{(toRate(growthRate.ann)*100).toFixed(2)}% {rateLabel}
+            </button>
+            <span style={{color:"var(--muted)"}}>·{" "}
+              {growthRate.years>=1?`${growthRate.years.toFixed(1)}y`:`${Math.round(growthRate.years*12)}mo`}
+            </span>
+          </div>
+        )}
         {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
       </div>
 
@@ -834,43 +885,100 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
         <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay}/>
       </div>
 
+      {/* ── Period Performance ── */}
+      {periodRows.length>0 && (<>
+        <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>Period Performance</span>
+          <button className="btn btn-ghost btn-xs" onClick={cycleRate}>Rate: {rateLabel}</button>
+        </div>
+        <div className="card" style={{overflowX:"auto"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
+                       borderBottom:"1px solid var(--border)",paddingBottom:6,marginBottom:4}}>
+            {['Period','Start',`Change`,`Rate (${rateLabel})`].map((h,i)=>(
+              <span key={h} style={{fontSize:".6rem",color:"var(--muted)",fontFamily:"var(--fm)",
+                                    letterSpacing:".08em",textTransform:"uppercase",
+                                    textAlign:i>0?"right":"left"}}>{h}</span>
+            ))}
+          </div>
+          {periodRows.map((row,i)=>{
+            const dispRate = row.annRate===null ? null : toRate(row.annRate);
+            return (
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
+                                   alignItems:"center",padding:"6px 0",
+                                   borderBottom:i<periodRows.length-1?"1px solid var(--border)":"none"}}>
+                <div>
+                  <div style={{fontSize:".75rem",color:"var(--text)"}}>{row.label}</div>
+                  <div style={{fontSize:".62rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>
+                    {new Date(row.fromTs).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+                  </div>
+                </div>
+                <div style={{textAlign:"right",fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>
+                  {fmt(row.startVal,displayCurrency,true)}
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:".75rem",fontFamily:"var(--fm)",
+                               color:row.change>=0?"var(--pos)":"var(--neg)"}}>
+                    {row.change>=0?"+":""}{fmt(row.change,displayCurrency,true)}
+                  </div>
+                  {row.changePct!==null&&(
+                    <div style={{fontSize:".62rem",fontFamily:"var(--fm)",
+                                 color:row.change>=0?"var(--pos)":"var(--neg)"}}>
+                      {row.changePct>=0?"+":""}{row.changePct.toFixed(1)}%
+                    </div>
+                  )}
+                </div>
+                <div style={{textAlign:"right",fontFamily:"var(--fm)",fontSize:".75rem",
+                             color:dispRate===null?"var(--muted)":dispRate>=0?"var(--pos)":"var(--neg)"}}>
+                  {dispRate===null?"—":`${dispRate>=0?"+":""}${(dispRate*100).toFixed(2)}%`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>)}
+
       {/* ── Allocation ── */}
       <div className="st">Asset Allocation</div>
       <div className="card">
         <div className="alloc-grid">
           <DonutChart byCls={s.byCls} displayCurrency={displayCurrency}/>
           <div className="alloc-bars">
-            {CLASS_OPTIONS.map(opt=>{
-              const clsKey=`cls:${opt.value}`;
-              const isExcl=excluded.has(clsKey);
-              const val=s.byCls[opt.value];
-              if(val===undefined&&!isExcl) return null;
-              const pct=val!==undefined?Math.min(Math.abs(val)/maxAbs*100,100):0;
-              return (
-                <div className={`bar-row${isExcl?" excl-row":""}`} key={opt.value}>
-                  <div className="bar-row-top">
-                    <span style={{color:isExcl?"var(--muted)":"var(--text)",display:"flex",alignItems:"center",gap:6}}>
-                      <span className="cls-dot" style={{background:CLS_COLORS[opt.value]||"var(--border2)"}}/>
-                      {opt.label}
-                    </span>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      {isExcl
-                        ? <span className="excl-tag">hidden</span>
-                        : <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
-                      }
-                      <button className="excl-btn" onClick={()=>onToggleExcluded(clsKey)} title={isExcl?"Show":"Hide"}>
-                        {isExcl?"Show":"Hide"}
-                      </button>
+            {(()=>{
+              const posTotal=Object.values(s.byCls).filter(v=>v>0).reduce((a,b)=>a+b,0);
+              return CLASS_OPTIONS.map(opt=>{
+                const clsKey=`cls:${opt.value}`;
+                const isExcl=excluded.has(clsKey);
+                const val=s.byCls[opt.value];
+                if(val===undefined&&!isExcl) return null;
+                const barPct=val!==undefined?Math.min(Math.abs(val)/maxAbs*100,100):0;
+                const sharePct=val>0&&posTotal>0?((val/posTotal)*100).toFixed(1):null;
+                return (
+                  <div className={`bar-row${isExcl?" excl-row":""}`} key={opt.value}>
+                    <div className="bar-row-top">
+                      <span style={{color:isExcl?"var(--muted)":"var(--text)",display:"flex",alignItems:"center",gap:6}}>
+                        <span className="cls-dot" style={{background:CLS_COLORS[opt.value]||"var(--border2)"}}/>
+                        {opt.label}
+                      </span>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        {isExcl
+                          ? <span className="excl-tag">hidden</span>
+                          : <><span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
+                            {sharePct&&<span className="bar-pct">{sharePct}%</span>}</>
+                        }
+                        <button className="excl-btn" onClick={()=>onToggleExcluded(clsKey)} title={isExcl?"Show":"Hide"}>
+                          {isExcl?"Show":"Hide"}
+                        </button>
+                      </div>
                     </div>
+                    {!isExcl&&val!==undefined&&(
+                      <div className="bar-track">
+                        <div className="bar-fill" style={{width:barPct+"%",background:val<0?"var(--neg)":CLS_COLORS[opt.value]||"var(--gold)"}}/>
+                      </div>
+                    )}
                   </div>
-                  {!isExcl&&val!==undefined&&(
-                    <div className="bar-track">
-                      <div className="bar-fill" style={{width:pct+"%",background:val<0?"var(--neg)":CLS_COLORS[opt.value]||"var(--gold)"}}/>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              });
+            })()}
           </div>
         </div>
       </div>
@@ -1271,8 +1379,10 @@ function MilestonesPage({ milestones, baselineId, displayCurrency, toDisplay, on
 // ─────────────────────────────────────────────────────────────
 //  ROOT APP
 // ─────────────────────────────────────────────────────────────
+const IS_LOCAL_DEV = import.meta.env.DEV;
+
 export default function App() {
-  const [idToken, setIdToken] = useState(getStoredAuth);
+  const [idToken, setIdToken] = useState(() => IS_LOCAL_DEV ? 'local-dev' : getStoredAuth());
   const [gsiReady, setGsiReady] = useState(false);
   const tokenRef = useRef(null);
   const hasAutoConnected = useRef(false);
@@ -1295,9 +1405,10 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const api = useRef(null);
 
-  useEffect(() => { tokenRef.current = idToken; }, [idToken]);
+  useEffect(() => { tokenRef.current = IS_LOCAL_DEV ? 'nw-local-dev-kjk-2025' : idToken; }, [idToken]);
 
   useEffect(() => {
+    if (IS_LOCAL_DEV) return;
     const init = () => {
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
@@ -1324,7 +1435,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!idToken) return;
+    if (!idToken || IS_LOCAL_DEV) return;
     const touch = () => {
       const s = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
       if (s) localStorage.setItem(AUTH_KEY, JSON.stringify({ ...s, lastActive: Date.now() }));
