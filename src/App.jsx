@@ -1578,6 +1578,7 @@ export default function App() {
   const [lastSync, setLastSync] = useState(null);
   const [toast, setToast] = useState(null);
   const api = useRef(null);
+  const vestingRef = useRef({});
 
   useEffect(() => { tokenRef.current = IS_LOCAL_DEV ? 'nw-local-dev-kjk-2025' : idToken; }, [idToken]);
 
@@ -1635,7 +1636,9 @@ export default function App() {
     setSyncing(true); setSyncErr(null);
     try {
       const data = await api.current.call("getAll");
-      setAccounts(data.accounts||[]);
+      const vestMap = (() => { try { return JSON.parse(data.settings?.vestingSchedules||'{}'); } catch { return {}; } })();
+      vestingRef.current = vestMap;
+      setAccounts((data.accounts||[]).map(a=>({...a, vesting: vestMap[a.id]||null})));
       setMilestones(data.milestones||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
@@ -1651,7 +1654,9 @@ export default function App() {
     try {
       api.current = createApi(url, () => tokenRef.current);
       const data = await api.current.call("getAll");
-      setAccounts(data.accounts||[]);
+      const vestMap = (() => { try { return JSON.parse(data.settings?.vestingSchedules||'{}'); } catch { return {}; } })();
+      vestingRef.current = vestMap;
+      setAccounts((data.accounts||[]).map(a=>({...a, vesting: vestMap[a.id]||null})));
       setMilestones(data.milestones||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
@@ -1721,22 +1726,42 @@ export default function App() {
   }, []);
 
   // CRUD
+  const pushVestingSettings = async () => {
+    try { await api.current.call("setSetting", {key:"vestingSchedules", value:JSON.stringify(vestingRef.current)}); } catch {}
+  };
+
   const addAccount = async (form) => {
     const acc={id:uid(),...form,createdTs:Date.now(),records:[]};
+    if (acc.vesting) vestingRef.current={...vestingRef.current,[acc.id]:acc.vesting};
     setAccounts(p=>[...p,acc]); showToast(`"${acc.name}" added`);
-    try { await api.current.callWithData("addAccount", acc); }
+    try {
+      const {vesting,...accData}=acc;
+      await api.current.callWithData("addAccount", accData);
+      await pushVestingSettings();
+    }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const updateAccount = async (id, form) => {
     const acc=accounts.find(a=>a.id===id);
+    const merged={...acc,...form};
+    if (merged.vesting) vestingRef.current={...vestingRef.current,[id]:merged.vesting};
+    else { const v={...vestingRef.current}; delete v[id]; vestingRef.current=v; }
     setAccounts(p=>p.map(a=>a.id===id?{...a,...form}:a)); showToast("Account updated");
-    try { await api.current.callWithData("updateAccount", {...acc,...form}); }
+    try {
+      const {vesting,...accData}=merged;
+      await api.current.callWithData("updateAccount", accData);
+      await pushVestingSettings();
+    }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const deleteAccount = async (id) => {
     const acc=accounts.find(a=>a.id===id);
+    const v={...vestingRef.current}; delete v[id]; vestingRef.current=v;
     setAccounts(p=>p.filter(a=>a.id!==id)); showToast(`"${acc?.name}" removed`,"warn");
-    try { await api.current.call("deleteAccount", {id}); }
+    try {
+      await api.current.call("deleteAccount", {id});
+      await pushVestingSettings();
+    }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
   const addRecord = async (accountId, {amount, ts}) => {
