@@ -1392,12 +1392,104 @@ function DragHandleIcon() {
   );
 }
 
-function SortableAccountCard({ id, isDragOverlay, children }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+// ─────────────────────────────────────────────────────────────
+//  ACCOUNT CARD (shared by list + drag overlay)
+// ─────────────────────────────────────────────────────────────
+function AccountCard({ acc, displayCurrency, toDisplay, excluded, onToggleExcluded, onDelete, onRecord, onEdit, onView, dragListeners, dragAttributes, isOverlay }) {
+  const bal = latestBalance(acc);
+  const frac = acc.vesting ? vestedFraction(acc.vesting) : 1;
+  const vestedBal = bal !== null ? (acc.vesting ? bal * frac : bal) : null;
+  const unvestedBal = bal !== null && acc.vesting ? bal * (1 - frac) : null;
+  const conv = vestedBal !== null ? toDisplay(vestedBal, acc.currency) : null;
+  const signed = conv !== null ? (acc.type === "liability" ? -Math.abs(conv) : conv) : null;
+  const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
+  const clsExcl = excluded.has(`cls:${acc.class}`);
+  const vestPct = acc.vesting ? Math.round(frac * 100) : null;
+  const isPrevest = acc.vesting && frac === 0;
+  const isFullyVested = acc.vesting && frac === 1;
+
   return (
-    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={isDragging ? "acc-card-dragging" : ""}>
-      {children(listeners, attributes)}
+    <div className={`acc-card acc-card-click${isExcl ? " excl-card" : ""}${isOverlay ? " drag-overlay" : ""}`}
+      onClick={() => !isOverlay && onView(acc)}>
+      <div className="acc-top">
+        <div className="drag-handle" {...(dragListeners||{})} {...(dragAttributes||{})}
+          onClick={e => e.stopPropagation()} style={{touchAction:"none"}}>
+          <DragHandleIcon />
+        </div>
+        <div style={{flex:1}}>
+          <div className="acc-name">{acc.name}</div>
+          <div style={{fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)",marginTop:2}}>{acc.currency}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div className={`acc-balance ${acc.type === "liability" ? "liability" : ""}`}>
+            {vestedBal !== null ? fmt(vestedBal, acc.currency) : "No balance recorded"}
+          </div>
+          {unvestedBal !== null && unvestedBal > 0 && (
+            <div style={{fontSize:".68rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>+{fmt(unvestedBal, acc.currency)} unvested</div>
+          )}
+          {conv !== null && acc.currency !== displayCurrency && (
+            <div style={{fontSize:".7rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>≈ {fmt(signed, displayCurrency)}</div>
+          )}
+        </div>
+      </div>
+      {acc.vesting && bal !== null && (
+        <div className="vest-progress">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
+              {isPrevest ? "Pre-cliff" : isFullyVested ? "Fully Vested" : `Vesting · ${vestPct}%`}
+            </span>
+            <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
+              {isFullyVested
+                ? `Vested ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                : isPrevest
+                  ? `Cliff ${new Date(Number(acc.vesting.cliffDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
+                  : `Full vest ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`}
+            </span>
+          </div>
+          <div className="vest-track"><div className="vest-fill" style={{width:`${vestPct}%`}}/></div>
+        </div>
+      )}
+      <div className="acc-pills">
+        <Pill label={CLASS_OPTIONS.find(o=>o.value===acc.class)?.label||acc.class} color="var(--gold)"/>
+        <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===acc.liquidity)?.label||acc.liquidity} color={LIQ_COLORS[acc.liquidity]||"#6b7280"}/>
+        <Pill label={(RISK_OPTIONS.find(o=>o.value===acc.risk)?.label||acc.risk)+" risk"} color={RISK_COLORS[acc.risk]||"#6b7280"}/>
+        <Pill label={acc.type==="liability"?"Liability":"Asset"} color={acc.type==="liability"?"var(--neg)":"var(--teal)"}/>
+        {acc.vesting&&<Pill label={isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`${vestPct}% Vested`} color={isPrevest?"var(--muted)":isFullyVested?"var(--pos)":"var(--gold)"}/>}
+        {isExcl&&<Pill label={clsExcl?"Class hidden":"Hidden from overview"} color="var(--muted)"/>}
+      </div>
+      {!isOverlay && (
+        <div className="acc-footer">
+          <div className="acc-ts">
+            {latestTs(acc) ? "Updated "+fmtDate(latestTs(acc)) : "Never updated"}
+            {acc.notes&&<span style={{marginLeft:8,color:"var(--muted)"}}>· {acc.notes}</span>}
+          </div>
+          <div className="acc-actions" onClick={e=>e.stopPropagation()}>
+            <button className="btn btn-ghost btn-xs" onClick={()=>onRecord(acc)}>Update Balance</button>
+            <button className="btn btn-ghost btn-xs" onClick={()=>onEdit(acc)}>Edit</button>
+            {!clsExcl&&(
+              <button className={`btn btn-xs ${isExcl?"btn-ghost excl-active":"btn-ghost"}`}
+                onClick={()=>onToggleExcluded(acc.id)}>
+                {isExcl?"Unhide":"Hide"}
+              </button>
+            )}
+            <button className="btn btn-danger btn-xs"
+              onClick={()=>{if(window.confirm(`Remove "${acc.name}"?`))onDelete(acc.id)}}>✕</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SortableAccountCard({ acc, ...cardProps }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: acc.id });
+  const style = {
+    transform: CSS.Transform.toString(transform) || undefined,
+    transition: transition || undefined,
+  };
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? "acc-card-dragging" : ""}>
+      <AccountCard acc={acc} dragListeners={listeners} dragAttributes={attributes} {...cardProps} />
     </div>
   );
 }
@@ -1416,8 +1508,9 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const sorted = useMemo(() => {
-    if (!accountOrder?.length) return accounts;
-    const orderMap = new Map(accountOrder.map((id, i) => [id, i]));
+    const order = Array.isArray(accountOrder) ? accountOrder : [];
+    if (!order.length) return accounts;
+    const orderMap = new Map(order.map((id, i) => [id, i]));
     return [...accounts].sort((a, b) => (orderMap.get(a.id) ?? Infinity) - (orderMap.get(b.id) ?? Infinity));
   }, [accounts, accountOrder]);
 
@@ -1430,97 +1523,15 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
     const filteredIds = filtered.map(a => a.id);
     const newFilteredIds = arrayMove(filteredIds, filteredIds.indexOf(active.id), filteredIds.indexOf(over.id));
     const visibleSet = new Set(filteredIds);
-    const base = accountOrder?.length ? accountOrder : accounts.map(a => a.id);
+    const base = (Array.isArray(accountOrder) && accountOrder.length) ? accountOrder : accounts.map(a => a.id);
     let vi = 0;
     const newOrder = base.map(id => visibleSet.has(id) ? newFilteredIds[vi++] : id);
     accounts.forEach(a => { if (!newOrder.includes(a.id)) newOrder.push(a.id); });
     onReorder(newOrder);
   };
 
-  const renderCard = (acc, dragListeners, dragAttributes, isOverlay = false) => {
-    const bal = latestBalance(acc);
-    const frac = acc.vesting ? vestedFraction(acc.vesting) : 1;
-    const vestedBal = bal !== null ? (acc.vesting ? bal * frac : bal) : null;
-    const unvestedBal = bal !== null && acc.vesting ? bal * (1 - frac) : null;
-    const conv = vestedBal !== null ? toDisplay(vestedBal, acc.currency) : null;
-    const signed = conv !== null ? (acc.type === "liability" ? -Math.abs(conv) : conv) : null;
-    const isExcl = excluded.has(acc.id) || excluded.has(`cls:${acc.class}`);
-    const clsExcl = excluded.has(`cls:${acc.class}`);
-    const vestPct = acc.vesting ? Math.round(frac * 100) : null;
-    const isPrevest = acc.vesting && frac === 0;
-    const isFullyVested = acc.vesting && frac === 1;
-    return (
-      <div className={`acc-card acc-card-click${isExcl ? " excl-card" : ""}${isOverlay ? " drag-overlay" : ""}`}
-        onClick={() => !isOverlay && setViewing(acc)}>
-        <div className="acc-top">
-          <div className="drag-handle" {...dragListeners} {...dragAttributes}
-            onClick={e => e.stopPropagation()} style={{touchAction:"none"}}>
-            <DragHandleIcon />
-          </div>
-          <div style={{flex:1}}>
-            <div className="acc-name">{acc.name}</div>
-            <div style={{fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)",marginTop:2}}>{acc.currency}</div>
-          </div>
-          <div style={{textAlign:"right"}}>
-            <div className={`acc-balance ${acc.type === "liability" ? "liability" : ""}`}>
-              {vestedBal !== null ? fmt(vestedBal, acc.currency) : "No balance recorded"}
-            </div>
-            {unvestedBal !== null && unvestedBal > 0 && (
-              <div style={{fontSize:".68rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>+{fmt(unvestedBal, acc.currency)} unvested</div>
-            )}
-            {conv !== null && acc.currency !== displayCurrency && (
-              <div style={{fontSize:".7rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>≈ {fmt(signed, displayCurrency)}</div>
-            )}
-          </div>
-        </div>
-        {acc.vesting && bal !== null && (
-          <div className="vest-progress">
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-              <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
-                {isPrevest ? "Pre-cliff" : isFullyVested ? "Fully Vested" : `Vesting · ${vestPct}%`}
-              </span>
-              <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
-                {isFullyVested
-                  ? `Vested ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
-                  : isPrevest
-                    ? `Cliff ${new Date(Number(acc.vesting.cliffDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`
-                    : `Full vest ${new Date(Number(acc.vesting.vestByDate)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`}
-              </span>
-            </div>
-            <div className="vest-track"><div className="vest-fill" style={{width:`${vestPct}%`}}/></div>
-          </div>
-        )}
-        <div className="acc-pills">
-          <Pill label={CLASS_OPTIONS.find(o=>o.value===acc.class)?.label||acc.class} color="var(--gold)"/>
-          <Pill label={LIQUIDITY_OPTIONS.find(o=>o.value===acc.liquidity)?.label||acc.liquidity} color={LIQ_COLORS[acc.liquidity]||"#6b7280"}/>
-          <Pill label={(RISK_OPTIONS.find(o=>o.value===acc.risk)?.label||acc.risk)+" risk"} color={RISK_COLORS[acc.risk]||"#6b7280"}/>
-          <Pill label={acc.type==="liability"?"Liability":"Asset"} color={acc.type==="liability"?"var(--neg)":"var(--teal)"}/>
-          {acc.vesting&&<Pill label={isPrevest?"Pre-cliff":isFullyVested?"Fully Vested":`${vestPct}% Vested`} color={isPrevest?"var(--muted)":isFullyVested?"var(--pos)":"var(--gold)"}/>}
-          {isExcl&&<Pill label={clsExcl?"Class hidden":"Hidden from overview"} color="var(--muted)"/>}
-        </div>
-        {!isOverlay && (
-          <div className="acc-footer">
-            <div className="acc-ts">
-              {latestTs(acc) ? "Updated "+fmtDate(latestTs(acc)) : "Never updated"}
-              {acc.notes&&<span style={{marginLeft:8,color:"var(--muted)"}}>· {acc.notes}</span>}
-            </div>
-            <div className="acc-actions" onClick={e=>e.stopPropagation()}>
-              <button className="btn btn-ghost btn-xs" onClick={()=>setRecording(acc)}>Update Balance</button>
-              <button className="btn btn-ghost btn-xs" onClick={()=>setEditing(acc)}>Edit</button>
-              {!clsExcl&&(
-                <button className={`btn btn-xs ${isExcl?"btn-ghost excl-active":"btn-ghost"}`}
-                  onClick={()=>onToggleExcluded(acc.id)}>
-                  {isExcl?"Unhide":"Hide"}
-                </button>
-              )}
-              <button className="btn btn-danger btn-xs"
-                onClick={()=>{if(window.confirm(`Remove "${acc.name}"?`))onDelete(acc.id)}}>✕</button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
+  const cardProps = { displayCurrency, toDisplay, excluded, onToggleExcluded, onDelete,
+    onRecord: acc => setRecording(acc), onEdit: acc => setEditing(acc), onView: acc => setViewing(acc) };
 
   return (
     <div className="page">
@@ -1540,13 +1551,11 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
         onDragStart={({active})=>setActiveId(active.id)} onDragEnd={handleDragEnd}>
         <SortableContext items={filtered.map(a=>a.id)} strategy={verticalListSortingStrategy}>
           {filtered.map(acc=>(
-            <SortableAccountCard key={acc.id} id={acc.id}>
-              {(listeners, attrs) => renderCard(acc, listeners, attrs)}
-            </SortableAccountCard>
+            <SortableAccountCard key={acc.id} acc={acc} {...cardProps}/>
           ))}
         </SortableContext>
         <DragOverlay dropAnimation={null}>
-          {activeAcc ? renderCard(activeAcc, null, null, true) : null}
+          {activeAcc && <AccountCard acc={activeAcc} {...cardProps} isOverlay={true}/>}
         </DragOverlay>
       </DndContext>
 
