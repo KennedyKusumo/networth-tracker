@@ -188,7 +188,6 @@ const createApi = (url, getToken) => ({
 //  STYLES
 // ─────────────────────────────────────────────────────────────
 const STYLE = `
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Fira+Code:wght@300;400;500&family=Jost:wght@300;400;500;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#0c0e13;--s1:#13161e;--s2:#181c26;--s3:#1f2433;
