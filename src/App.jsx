@@ -350,6 +350,20 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 @media(pointer:coarse){.drag-handle{opacity:.35}}
 .acc-card-dragging{opacity:0!important}
 .drag-overlay{box-shadow:0 16px 48px rgba(0,0,0,.7);transform:scale(1.02);border-color:var(--gold)!important}
+/* ── Targets ── */
+.tgt-card{background:var(--s2);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:12px;transition:border-color .15s}
+.tgt-card:hover{border-color:var(--gold)}
+.tgt-card.achieved{border-color:var(--pos);opacity:.75}
+.tgt-track{height:6px;background:var(--s3);border-radius:3px;overflow:hidden;margin:8px 0 4px}
+.tgt-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--gold),var(--pos));transition:width .5s ease}
+.tgt-fill.achieved{background:var(--pos)}
+.tgt-hero{background:var(--s2);border:1px solid var(--border2);border-radius:var(--r2);padding:12px 14px;margin-top:12px}
+/* ── Model/What-If ── */
+.model-card{background:var(--s2);border:1px solid var(--border2);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.slider{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:2px;background:var(--s3);outline:none;cursor:pointer}
+.slider::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--gold);cursor:pointer;border:2px solid var(--bg)}
+.slider::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--gold);cursor:pointer;border:2px solid var(--bg)}
+.scenario-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
 `;
 
 // ─────────────────────────────────────────────────────────────
@@ -497,9 +511,21 @@ function DonutChart({ byCls, displayCurrency }) {
 // ─────────────────────────────────────────────────────────────
 //  TREND CHART
 // ─────────────────────────────────────────────────────────────
-function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
+function TrendChart({ milestones, currentValue, displayCurrency, toDisplay, targets = [] }) {
   const [tipIdx, setTipIdx] = useState(null);
   const svgRef = useRef(null);
+
+  const now = Date.now();
+  const futureTgts = useMemo(() => (targets||[])
+    .filter(t => Number(t.targetTs) > now)
+    .map(t => ({
+      ts: Number(t.targetTs),
+      val: t.currency === displayCurrency ? t.amount : toDisplay(t.amount, t.currency),
+      label: t.label || 'Target',
+      isTgt: true,
+    }))
+    .sort((a,b) => a.ts - b.ts),
+  [targets, displayCurrency, toDisplay]);
 
   const pts = useMemo(() => {
     const ms = [...milestones]
@@ -509,7 +535,7 @@ function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
         const val = cur===displayCurrency ? (m.summary?.total||0) : toDisplay(m.summary?.total||0, cur);
         return { ts: Number(m.ts), val, label: m.label||null };
       });
-    return [...ms, { ts: Date.now(), val: currentValue, label: "Now", isNow: true }];
+    return [...ms, { ts: now, val: currentValue, label: "Now", isNow: true }];
   }, [milestones, currentValue, displayCurrency, toDisplay]);
 
   if (pts.length < 2) return (
@@ -519,12 +545,15 @@ function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
     </div>
   );
 
-  const W=560, H=150, PAD={l:58,r:14,t:12,b:30};
+  const allTs = [...pts, ...futureTgts].map(p => p.ts);
+  const allVals = [...pts, ...futureTgts].map(p => p.val);
+  const W=560, H=150, PAD={l:58,r:16,t:12,b:30};
   const iW=W-PAD.l-PAD.r, iH=H-PAD.t-PAD.b;
-  const vals=pts.map(p=>p.val);
-  const minV=Math.min(...vals), maxV=Math.max(...vals);
-  const vSpan=(maxV-minV)||1, tSpan=pts.at(-1).ts-pts[0].ts||1;
-  const sx=t=>PAD.l+((t-pts[0].ts)/tSpan)*iW;
+  const minV=Math.min(...allVals), maxV=Math.max(...allVals);
+  const vSpan=(maxV-minV)||1;
+  const minTs=Math.min(...allTs), maxTs=Math.max(...allTs);
+  const tSpan=(maxTs-minTs)||1;
+  const sx=t=>PAD.l+((t-minTs)/tSpan)*iW;
   const sy=v=>PAD.t+iH-((v-minV)/vSpan)*iH;
   const mapped=pts.map(p=>({...p,x:sx(p.ts),y:sy(p.val)}));
   const f=n=>n.toFixed(1);
@@ -533,6 +562,7 @@ function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
   const yTicks=[0,0.5,1].map(frac=>({v:minV+frac*vSpan,y:sy(minV+frac*vSpan)}));
   const isUp=pts.at(-1).val>=pts[0].val;
   const lc=isUp?"#c9a96e":"#e07070";
+  const nowX=sx(now), nowY=sy(currentValue);
 
   const handleMM=e=>{
     if(!svgRef.current) return;
@@ -566,6 +596,24 @@ function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
         ))}
         <path d={areaPath} fill="url(#tgrad)"/>
         <path d={linePath} fill="none" stroke={lc} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+        {/* future target dashed lines */}
+        {futureTgts.map((t,i)=>{
+          const tx=sx(t.ts), ty=sy(t.val);
+          const achieved=currentValue>=t.val;
+          const tc=achieved?"var(--pos)":"#6fb5a2";
+          return (
+            <g key={i}>
+              <line x1={nowX} y1={nowY} x2={tx} y2={ty}
+                stroke={tc} strokeWidth="1.5" strokeDasharray="5 3" opacity=".7"/>
+              <polygon points={`${f(tx)},${f(ty-6)} ${f(tx+5)},${f(ty+3)} ${f(tx-5)},${f(ty+3)}`}
+                fill={tc} opacity=".9"/>
+              <text x={tx} y={ty-9} textAnchor="middle"
+                style={{fontFamily:"var(--fm)",fontSize:"7px",fill:tc,letterSpacing:".04em"}}>
+                {t.label}
+              </text>
+            </g>
+          );
+        })}
         {mapped.map((p,i)=>(
           <circle key={i} cx={p.x} cy={p.y} r={tipIdx===i?5:3.5} fill={lc} stroke="var(--s1)" strokeWidth="1.5"/>
         ))}
@@ -573,9 +621,14 @@ function TrendChart({ milestones, currentValue, displayCurrency, toDisplay }) {
         <text x={mapped[0].x} y={H-5} textAnchor="start" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
           {new Date(pts[0].ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"})}
         </text>
-        <text x={mapped.at(-1).x} y={H-5} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+        <text x={nowX} y={H-5} textAnchor={futureTgts.length?"middle":"end"} style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
           Now
         </text>
+        {futureTgts.length > 0 && (
+          <text x={sx(futureTgts.at(-1).ts)} y={H-5} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+            {new Date(futureTgts.at(-1).ts).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"2-digit"})}
+          </text>
+        )}
       </svg>
       {tip&&(
         <div className="chart-tt" style={{left:`${(tip.x/W*100).toFixed(1)}%`}}>
@@ -854,7 +907,7 @@ function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, on
 // ─────────────────────────────────────────────────────────────
 //  OVERVIEW PAGE
 // ─────────────────────────────────────────────────────────────
-function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
+function OverviewPage({ accounts, milestones, targets, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
   const [showSaveDlg, setShowSaveDlg] = useState(false);
   const [rateUnit, setRateUnit] = useState('ann'); // 'ann' | 'mo' | 'day'
   const cycleRate = () => setRateUnit(u => u==='ann'?'mo':u==='mo'?'day':'ann');
@@ -958,6 +1011,51 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
         )}
         {baseline && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6}}>Baseline: {baseline.label||fmtDate(baseline.ts)}</div>}
         {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
+        {/* ── Nearest upcoming target ── */}
+        {(()=>{
+          const now = Date.now();
+          const upcoming = (targets||[])
+            .filter(t=>Number(t.targetTs)>now)
+            .sort((a,b)=>Number(a.targetTs)-Number(b.targetTs));
+          if (!upcoming.length) return null;
+          const t = upcoming[0];
+          const tVal = t.currency===displayCurrency ? t.amount : toDisplay(t.amount, t.currency);
+          const pct = tVal>0 ? Math.min(s.total/tVal*100,100) : 0;
+          const achieved = s.total >= tVal;
+          const monthsLeft = (Number(t.targetTs)-now)/(30*86400000);
+          let onTrack = null;
+          if (growthRate && growthRate.ann && !achieved) {
+            const elYears = (Number(t.targetTs)-now)/(365.25*86400000);
+            const projected = s.total * (1+growthRate.ann)**elYears;
+            if (projected >= tVal) {
+              onTrack = "on track";
+            } else {
+              const shortfall = tVal - projected;
+              const behindMo = Math.ceil(Math.log(tVal/s.total)/Math.log(1+growthRate.ann/12) - monthsLeft);
+              onTrack = behindMo>0 ? `~${behindMo}mo behind` : "on track";
+            }
+          }
+          return (
+            <div className="tgt-hero">
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:6}}>
+                <span style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--gold)",letterSpacing:".06em",textTransform:"uppercase"}}>
+                  🎯 {t.label||"Target"}
+                </span>
+                <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                  {achieved ? "✓ Achieved" : `${fmt(tVal,displayCurrency)} · ${Math.ceil(monthsLeft)}mo left`}
+                  {onTrack && !achieved && <span style={{marginLeft:6,color:onTrack==="on track"?"var(--pos)":"var(--neg)"}}>{onTrack}</span>}
+                </span>
+              </div>
+              <div className="tgt-track">
+                <div className="tgt-fill" style={{width:pct+"%",...(achieved?{background:"var(--pos)"}:{})}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>{pct.toFixed(1)}% complete</span>
+                {upcoming.length>1&&<span style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>+{upcoming.length-1} more target{upcoming.length>2?"s":""}</span>}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── Net Worth Trend ── */}
@@ -966,7 +1064,7 @@ function OverviewPage({ accounts, milestones, baselineId, displayCurrency, rates
         <button className="btn btn-ghost btn-xs" onClick={()=>setShowSaveDlg(true)}>📌 Save Milestone</button>
       </div>
       <div className="card">
-        <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay}/>
+        <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay} targets={targets}/>
       </div>
 
       {/* ── Period Performance ── */}
@@ -1573,6 +1671,116 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
 }
 
 // ─────────────────────────────────────────────────────────────
+//  TARGET MODAL
+// ─────────────────────────────────────────────────────────────
+function TargetModal({ initial, displayCurrency, onSave, onClose }) {
+  const [label, setLabel] = useState(initial?.label || "");
+  const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
+  const [dateStr, setDateStr] = useState(() => {
+    const d = initial ? new Date(Number(initial.targetTs)) : new Date(Date.now()+365*86400000);
+    return d.toISOString().slice(0,10);
+  });
+  const minDate = new Date(Date.now()+86400000).toISOString().slice(0,10);
+  const valid = label.trim() && Number(amount)>0 && dateStr >= minDate;
+  const save = () => {
+    if (!valid) return;
+    onSave({
+      label: label.trim(),
+      amount: Number(amount),
+      currency: displayCurrency,
+      targetTs: new Date(dateStr+'T00:00:00').getTime(),
+      ...(initial ? {id: initial.id, createdTs: initial.createdTs} : {id: uid(), createdTs: Date.now()}),
+    });
+  };
+  return (
+    <div className="modal-bg" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
+      <div className="modal">
+        <div className="modal-title">{initial?"Edit Target":"New Target"}</div>
+        <div className="label">Label</div>
+        <input className="input" value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. Financial Independence"/>
+        <div className="label" style={{marginTop:10}}>Target Amount ({displayCurrency})</div>
+        <input className="input" type="number" min="0" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="e.g. 500000"/>
+        <div className="label" style={{marginTop:10}}>Target Date</div>
+        <input className="input" type="date" value={dateStr} min={minDate} onChange={e=>setDateStr(e.target.value)}/>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:16}}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={save} disabled={!valid}>
+            {initial?"Save Changes":"Add Target"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TARGETS PAGE
+// ─────────────────────────────────────────────────────────────
+function TargetsPage({ targets, displayCurrency, toDisplay, currentNW, onAdd, onUpdate, onDelete }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const now = Date.now();
+  const sorted = [...targets].sort((a,b)=>Number(a.targetTs)-Number(b.targetTs));
+
+  return (
+    <div className="page">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+        <div style={{color:"var(--muted2)",fontSize:".85rem",lineHeight:1.5}}>
+          Set net worth targets with deadlines. Progress is tracked on the Overview page.
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={()=>setShowAdd(true)}>+ Add Target</button>
+      </div>
+      {sorted.length===0&&(
+        <div className="empty"><div className="empty-icon">🎯</div>No targets yet. Add one to track your progress.</div>
+      )}
+      {sorted.map(t=>{
+        const tVal = t.currency===displayCurrency ? t.amount : toDisplay(t.amount, t.currency);
+        const pct = tVal>0 ? Math.min(currentNW/tVal*100,100) : 0;
+        const achieved = currentNW >= tVal;
+        const isPast = Number(t.targetTs) < now;
+        const daysLeft = Math.ceil((Number(t.targetTs)-now)/86400000);
+        return (
+          <div className={`tgt-card${achieved?" achieved":""}`} key={t.id}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div>
+                <div style={{fontFamily:"var(--fd)",fontSize:"1rem",color:achieved?"var(--pos)":"var(--text)",marginBottom:2}}>
+                  {achieved&&"✓ "}{t.label||"Untitled Target"}
+                </div>
+                <div style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                  {new Date(Number(t.targetTs)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+                  {!achieved&&!isPast&&<span style={{marginLeft:8}}>{daysLeft}d left</span>}
+                  {isPast&&!achieved&&<span style={{marginLeft:8,color:"var(--neg)"}}>overdue</span>}
+                </div>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <div style={{fontSize:"1rem",fontFamily:"var(--fd)",color:achieved?"var(--pos)":"var(--gold)"}}>
+                  {fmt(tVal,displayCurrency)}
+                </div>
+                <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                  {fmt(currentNW,displayCurrency)} now
+                </div>
+              </div>
+            </div>
+            <div className="tgt-track">
+              <div className="tgt-fill" style={{width:pct+"%",...(achieved?{background:"var(--pos)"}:{})}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>{pct.toFixed(1)}% complete</span>
+              <div style={{display:"flex",gap:6}}>
+                <button className="btn btn-ghost btn-xs" onClick={()=>setEditing(t)}>Edit</button>
+                <button className="btn btn-danger btn-xs" onClick={()=>{if(window.confirm("Delete this target?"))onDelete(t.id)}}>Delete</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {showAdd&&<TargetModal displayCurrency={displayCurrency} onSave={d=>{onAdd(d);setShowAdd(false)}} onClose={()=>setShowAdd(false)}/>}
+      {editing&&<TargetModal initial={editing} displayCurrency={displayCurrency} onSave={d=>{onUpdate(d);setEditing(null)}} onClose={()=>setEditing(null)}/>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  MILESTONES PAGE
 // ─────────────────────────────────────────────────────────────
 function MilestonesPage({ milestones, baselineId, displayCurrency, toDisplay, onDelete, onSetBaseline, onUpdateLabel }) {
@@ -1636,6 +1844,263 @@ function MilestonesPage({ milestones, baselineId, displayCurrency, toDisplay, on
 }
 
 // ─────────────────────────────────────────────────────────────
+//  PHASE 3 · PROJECTION ENGINE
+// ─────────────────────────────────────────────────────────────
+const projectNW = (start, annRate, monthlyContrib, months) => {
+  const mr = (1 + annRate) ** (1/12) - 1;
+  const pts = [start];
+  let v = start;
+  for (let i = 1; i <= months; i++) {
+    v = v * (1 + mr) + monthlyContrib;
+    pts.push(v);
+  }
+  return pts;
+};
+
+const monthsToReach = (start, annRate, monthlyContrib, target) => {
+  if (start >= target) return 0;
+  const mr = (1 + annRate) ** (1/12) - 1;
+  let v = start, m = 0;
+  while (v < target && m < 1200) { v = v * (1 + mr) + monthlyContrib; m++; }
+  return v >= target ? m : null;
+};
+
+const solveRequiredRate = (start, monthlyContrib, target, months) => {
+  if (months <= 0 || start >= target) return 0;
+  let lo = -0.5, hi = 5.0;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const proj = projectNW(start, mid, monthlyContrib, months);
+    if (proj.at(-1) >= target) hi = mid; else lo = mid;
+  }
+  return (lo + hi) / 2;
+};
+
+// ─────────────────────────────────────────────────────────────
+//  MODEL PAGE  (Phase 3 · What-If)
+// ─────────────────────────────────────────────────────────────
+function ModelPage({ currentNW, targets, historicalRate, displayCurrency }) {
+  const defaultRate = historicalRate != null ? Math.round(historicalRate * 1000) / 10 : 7;
+  const [rateInput, setRateInput] = useState(String(defaultRate));
+  const [monthly, setMonthly] = useState(0);
+  const [horizon, setHorizon] = useState(120);
+  const [showScenarios, setShowScenarios] = useState(false);
+  const svgRef = useRef(null);
+  const [tipMonth, setTipMonth] = useState(null);
+
+  const annRate = parseFloat(rateInput) / 100 || 0;
+  const months = horizon;
+
+  const base = useMemo(() => projectNW(currentNW, annRate, monthly, months), [currentNW, annRate, monthly, months]);
+  const pess = useMemo(() => showScenarios ? projectNW(currentNW, Math.max(annRate-0.02,-0.99), monthly, months) : null, [currentNW, annRate, monthly, months, showScenarios]);
+  const opti = useMemo(() => showScenarios ? projectNW(currentNW, annRate+0.02, monthly, months) : null, [currentNW, annRate, monthly, months, showScenarios]);
+
+  const nearestTarget = useMemo(() => {
+    const now = Date.now();
+    return (targets||[]).filter(t=>Number(t.targetTs)>now).sort((a,b)=>Number(a.targetTs)-Number(b.targetTs))[0] || null;
+  }, [targets]);
+
+  const tgtVal = nearestTarget ? nearestTarget.amount : null;
+
+  const moToTarget = useMemo(() => tgtVal!=null ? monthsToReach(currentNW, annRate, monthly, tgtVal) : null, [currentNW, annRate, monthly, tgtVal]);
+
+  const reqRate = useMemo(() => {
+    if (!nearestTarget || tgtVal==null) return null;
+    const mo = Math.ceil((Number(nearestTarget.targetTs)-Date.now())/2628000000);
+    return mo>0 ? solveRequiredRate(currentNW, monthly, tgtVal, mo) : null;
+  }, [currentNW, monthly, nearestTarget, tgtVal]);
+
+  // SVG projection chart
+  const allVals = [...base, ...(pess||[]), ...(opti||[])];
+  const W=560, H=160, PAD={l:62,r:14,t:12,b:30};
+  const iW=W-PAD.l-PAD.r, iH=H-PAD.t-PAD.b;
+  const minV=Math.min(...allVals,tgtVal??Infinity), maxV=Math.max(...allVals);
+  const vSpan=(maxV-minV)||1;
+  const sx=m=>PAD.l+(m/months)*iW;
+  const sy=v=>PAD.t+iH-((v-minV)/vSpan)*iH;
+  const f=n=>n.toFixed(1);
+  const path=arr=>arr.map((v,i)=>`${i?"L":"M"}${f(sx(i))},${f(sy(v))}`).join(" ");
+  const yTicks=[0,0.5,1].map(fr=>({v:minV+fr*vSpan,y:sy(minV+fr*vSpan)}));
+
+  const handleMM = e => {
+    if(!svgRef.current) return;
+    const rect=svgRef.current.getBoundingClientRect();
+    const mx=(e.clientX-rect.left)/rect.width*W;
+    const m=Math.round(Math.max(0,Math.min(months,(mx-PAD.l)/iW*months)));
+    setTipMonth(m);
+  };
+
+  const tip = tipMonth!=null ? {m:tipMonth, base:base[tipMonth]??(base.at(-1)), pess:pess?.[tipMonth], opti:opti?.[tipMonth]} : null;
+  const tgtY = tgtVal!=null && tgtVal>=minV && tgtVal<=maxV ? sy(tgtVal) : null;
+
+  const xLabels = [0, Math.round(months/2), months].map(m => ({
+    m, x: sx(m),
+    label: m===0 ? "Now" : new Date(Date.now()+m*30*86400000).toLocaleDateString("en-GB",{month:"short",year:"2-digit"}),
+  }));
+
+  return (
+    <div className="page">
+      {/* controls */}
+      <div className="model-card">
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,flexWrap:"wrap"}}>
+          <div>
+            <div className="label">Annual growth rate</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
+              <input type="range" className="slider" min="-20" max="40" step="0.5"
+                value={parseFloat(rateInput)||0}
+                onChange={e=>setRateInput(String(e.target.value))}/>
+              <input className="input" type="number" step="0.5"
+                style={{width:70,padding:"4px 8px",fontSize:".8rem"}}
+                value={rateInput} onChange={e=>setRateInput(e.target.value)}/>
+              <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>%</span>
+            </div>
+            {historicalRate!=null&&<div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:4}}>
+              Historical: {(historicalRate*100).toFixed(1)}% p.a.
+            </div>}
+          </div>
+          <div>
+            <div className="label">Monthly contribution</div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+              <input className="input" type="number" min="0" step="100"
+                style={{flex:1,padding:"4px 8px",fontSize:".8rem"}}
+                value={monthly} onChange={e=>setMonthly(Number(e.target.value)||0)}/>
+              <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>{displayCurrency}/mo</span>
+            </div>
+          </div>
+        </div>
+        <div style={{marginTop:12,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+          <div>
+            <span style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Horizon: </span>
+            {[60,120,240,360].map(h=>(
+              <button key={h} onClick={()=>setHorizon(h)}
+                className="btn btn-ghost btn-xs"
+                style={{marginLeft:4,...(horizon===h?{borderColor:"var(--gold)",color:"var(--gold)"}:{})}}>
+                {h/12}y
+              </button>
+            ))}
+          </div>
+          <button className="btn btn-ghost btn-xs" onClick={()=>setShowScenarios(s=>!s)}
+            style={showScenarios?{borderColor:"var(--gold)",color:"var(--gold)"}:{}}>
+            ±2% scenarios
+          </button>
+        </div>
+      </div>
+
+      {/* projection chart */}
+      <div className="model-card">
+        <div style={{position:"relative"}}>
+          <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`}
+            style={{width:"100%",display:"block",overflow:"visible",cursor:"crosshair"}}
+            onMouseMove={handleMM} onMouseLeave={()=>setTipMonth(null)}>
+            {yTicks.map((t,i)=>(
+              <g key={i}>
+                <line x1={PAD.l} y1={t.y} x2={W-PAD.r} y2={t.y} stroke="var(--border)" strokeWidth=".6" strokeDasharray="3 3"/>
+                <text x={PAD.l-6} y={t.y+4} textAnchor="end" style={{fontFamily:"var(--fm)",fontSize:"8px",fill:"var(--muted)"}}>
+                  {fmt(t.v,displayCurrency,true)}
+                </text>
+              </g>
+            ))}
+            {tgtY!=null&&(
+              <g>
+                <line x1={PAD.l} y1={tgtY} x2={W-PAD.r} y2={tgtY} stroke="var(--pos)" strokeWidth="1" strokeDasharray="4 3" opacity=".6"/>
+                <text x={W-PAD.r+2} y={tgtY+4} style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--pos)"}}>
+                  {nearestTarget?.label||"Target"}
+                </text>
+              </g>
+            )}
+            {showScenarios&&pess&&(
+              <path d={path(pess)} fill="none" stroke="#e07070" strokeWidth="1.2" strokeDasharray="4 2" opacity=".5"/>
+            )}
+            {showScenarios&&opti&&(
+              <path d={path(opti)} fill="none" stroke="#6fb5a2" strokeWidth="1.2" strokeDasharray="4 2" opacity=".5"/>
+            )}
+            <path d={path(base)} fill="none" stroke="var(--gold)" strokeWidth="2" strokeLinejoin="round"/>
+            {tip&&<line x1={sx(tip.m)} y1={PAD.t} x2={sx(tip.m)} y2={PAD.t+iH} stroke="var(--border2)" strokeWidth="1" strokeDasharray="3 3"/>}
+            {tip&&<circle cx={sx(tip.m)} cy={sy(tip.base)} r={4} fill="var(--gold)" stroke="var(--s1)" strokeWidth="1.5"/>}
+            {xLabels.map(({m,x,label})=>(
+              <text key={m} x={x} y={H-5} textAnchor={m===0?"start":m===months?"end":"middle"}
+                style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
+                {label}
+              </text>
+            ))}
+          </svg>
+          {tip&&(
+            <div className="chart-tt" style={{left:`${((sx(tip.m)-PAD.l)/iW*100).toFixed(1)}%`}}>
+              <div className="chart-tt-val" style={{color:"var(--gold)"}}>{fmt(tip.base,displayCurrency)}</div>
+              {tip.pess&&<div style={{fontSize:".62rem",color:"#e07070",fontFamily:"var(--fm)"}}>Low: {fmt(tip.pess,displayCurrency,true)}</div>}
+              {tip.opti&&<div style={{fontSize:".62rem",color:"#6fb5a2",fontFamily:"var(--fm)"}}>High: {fmt(tip.opti,displayCurrency,true)}</div>}
+              <div className="chart-tt-date">
+                {tip.m===0?"Now":new Date(Date.now()+tip.m*30*86400000).toLocaleDateString("en-GB",{month:"short",year:"numeric"})}
+              </div>
+            </div>
+          )}
+        </div>
+        {showScenarios&&(
+          <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap"}}>
+            {[["var(--neg)","Pessimistic",annRate-0.02],["var(--gold)","Base",annRate],["var(--pos)","Optimistic",annRate+0.02]].map(([c,l,r])=>(
+              <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
+                <div className="scenario-dot" style={{background:c}}/>
+                <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
+                  {l}: {(r*100).toFixed(1)}% → {fmt(projectNW(currentNW,r,monthly,months).at(-1),displayCurrency,true)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* summary stats */}
+      <div className="model-card">
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
+          <div>
+            <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>In {horizon/12} years</div>
+            <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--gold)",marginTop:2}}>{fmt(base.at(-1),displayCurrency)}</div>
+            <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+              {base.at(-1)>currentNW?`+${fmt(base.at(-1)-currentNW,displayCurrency,true)} gain`:"No growth"}
+            </div>
+          </div>
+          {tgtVal!=null&&(
+            <div>
+              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
+                Time to {nearestTarget?.label||"Target"}
+              </div>
+              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--teal)",marginTop:2}}>
+                {moToTarget===0?"Already reached":moToTarget===null?"Not reachable":`${moToTarget}mo`}
+              </div>
+              {moToTarget!=null&&moToTarget>0&&(
+                <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                  {new Date(Date.now()+moToTarget*30*86400000).toLocaleDateString("en-GB",{month:"short",year:"numeric"})}
+                </div>
+              )}
+            </div>
+          )}
+          {reqRate!=null&&(
+            <div>
+              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>Required rate</div>
+              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:reqRate<=annRate?"var(--pos)":"var(--neg)",marginTop:2}}>
+                {(reqRate*100).toFixed(1)}% p.a.
+              </div>
+              <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                to hit {nearestTarget?.label||"target"} on time
+              </div>
+            </div>
+          )}
+          {monthly>0&&(
+            <div>
+              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>Total contributed</div>
+              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--text)",marginTop:2}}>{fmt(monthly*months,displayCurrency,true)}</div>
+              <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                {fmt(monthly,displayCurrency,true)}/mo × {months}mo
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  ROOT APP
 // ─────────────────────────────────────────────────────────────
 const IS_LOCAL_DEV = import.meta.env.DEV;
@@ -1654,6 +2119,7 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [accountOrder, setAccountOrder] = useState([]);
   const [milestones, setMilestones] = useState([]);
+  const [targets, setTargets] = useState([]);
   const [baselineId, setBaselineId] = useState(null);
   const [displayCurrency, setDisplayCurrency] = useState("GBP");
   const [excluded, setExcluded] = useState(new Set());
@@ -1726,6 +2192,7 @@ export default function App() {
       vestingRef.current = vestMap;
       setAccounts((data.accounts||[]).map(a=>({...a, vesting: vestMap[a.id]||null})));
       setMilestones(data.milestones||[]);
+      setTargets(data.targets||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
@@ -1745,6 +2212,7 @@ export default function App() {
       vestingRef.current = vestMap;
       setAccounts((data.accounts||[]).map(a=>({...a, vesting: vestMap[a.id]||null})));
       setMilestones(data.milestones||[]);
+      setTargets(data.targets||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
@@ -1877,6 +2345,21 @@ export default function App() {
     try { await api.current.call("deleteMilestone", {id}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+  const addTarget = async (t) => {
+    setTargets(p=>[...p,t]); showToast(`Target "${t.label}" added`);
+    try { await api.current.callWithData("addTarget", t); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
+  const updateTarget = async (t) => {
+    setTargets(p=>p.map(x=>x.id===t.id?t:x)); showToast("Target updated");
+    try { await api.current.callWithData("updateTarget", t); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
+  const deleteTarget = async (id) => {
+    setTargets(p=>p.filter(t=>t.id!==id)); showToast("Target removed","warn");
+    try { await api.current.call("deleteTarget", {id}); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
   const setBaseline = async (id) => {
     setBaselineId(id); showToast(id?"Baseline set":"Baseline cleared");
     try { await api.current.call("setBaseline", {id: id||""}); }
@@ -1918,14 +2401,46 @@ export default function App() {
         </div>
 
         <div className="nav">
-          {[["overview","Overview"],["accounts",`Accounts (${accounts.length})`],["milestones",`Milestones (${milestones.length})`]].map(([id,label])=>(
+          {[
+            ["overview","Overview"],
+            ["accounts",`Accounts (${accounts.length})`],
+            ["milestones",`Milestones (${milestones.length})`],
+            ["targets",`Targets (${targets.length})`],
+            ["model","Model"],
+          ].map(([id,label])=>(
             <button key={id} className={`nb ${page===id?"on":""}`} onClick={()=>setPage(id)}>{label}</button>
           ))}
         </div>
 
-        {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone}/>}
-        {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
-        {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
+        {(()=>{
+          const baseline = milestones.find(m=>m.id===baselineId);
+          const baseTotal = baseline?.summary?.total ?? null;
+          const baseSavedCur = baseline?.summary?.currency || displayCurrency;
+          const baseConverted = baseTotal!==null ? (baseSavedCur===displayCurrency ? baseTotal : toDisplay(baseTotal,baseSavedCur)) : null;
+          const currentNW = (() => {
+            let t=0;
+            for (const a of accounts) {
+              if (excluded.has(a.id)||excluded.has(`cls:${a.class}`)) continue;
+              const raw=vestedBalance(a); if(raw===null) continue;
+              const conv=toDisplay(raw,a.currency);
+              t += a.type==="liability"?-Math.abs(conv):conv;
+            }
+            return t;
+          })();
+          const historicalRate = (()=>{
+            if (!baseline||baseConverted===null||baseConverted<=0) return null;
+            const el=(Date.now()-Number(baseline.ts))/(365.25*86400000);
+            if(el<7/365.25) return null;
+            return (currentNW/baseConverted)**(1/el)-1;
+          })();
+          return <>
+            {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone}/>}
+            {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
+            {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
+            {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
+            {page==="model"&&<ModelPage currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency}/>}
+          </>;
+        })()}
       </div>
 
       {toast&&<div className={`toast ${toast.type==="warn"?"warn":toast.type==="err"?"err":""}`}>{toast.msg}</div>}
