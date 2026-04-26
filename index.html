@@ -14,10 +14,19 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Fira+Code:wght@300;400;500&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet" />
-    <style>html,body{background:#0c0e13;margin:0;padding:0;min-height:100vh}</style>
+    <style>
+      html,body{background:#0c0e13;margin:0;padding:0;min-height:100vh;color:#e2ddd4;font-family:'Jost',sans-serif}
+      #pre-load{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none}
+      #pre-load-title{font-family:'Playfair Display',serif;font-size:1.8rem;color:#c9a96e;letter-spacing:.02em}
+      #pre-load-sub{font-family:'Fira Code',monospace;font-size:.65rem;color:#5e677a;letter-spacing:.18em;text-transform:uppercase}
+    </style>
     <script src="https://accounts.google.com/gsi/client" async></script>
   </head>
   <body>
+    <div id="pre-load">
+      <div id="pre-load-title">Net Worth Tracker</div>
+      <div id="pre-load-sub">Loading…</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
