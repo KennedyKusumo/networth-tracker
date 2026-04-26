@@ -167,20 +167,35 @@ const donutArc = (cx, cy, outerR, innerR, s, e) => {
 // ─────────────────────────────────────────────────────────────
 //  GOOGLE SHEETS API
 // ─────────────────────────────────────────────────────────────
+const fetchWithTimeout = (url, ms=20000) => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+};
 const createApi = (url, getToken) => ({
   call: async (action, params={}) => {
     const qs = new URLSearchParams({action, idToken: getToken?.() || '', ...params}).toString();
-    const res = await fetch(`${url}?${qs}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
+    try {
+      const res = await fetchWithTimeout(`${url}?${qs}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      return data;
+    } catch(e) {
+      if (e.name === 'AbortError') throw new Error('Request timed out — check your connection or try again');
+      throw e;
+    }
   },
   callWithData: async (action, data, extra={}) => {
     const qs = new URLSearchParams({action, idToken: getToken?.() || '', data: JSON.stringify(data), ...extra}).toString();
-    const res = await fetch(`${url}?${qs}`);
-    const json = await res.json();
-    if (json.error) throw new Error(json.error);
-    return json;
+    try {
+      const res = await fetchWithTimeout(`${url}?${qs}`);
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      return json;
+    } catch(e) {
+      if (e.name === 'AbortError') throw new Error('Request timed out — check your connection or try again');
+      throw e;
+    }
   },
 });
 
@@ -369,13 +384,21 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 // ─────────────────────────────────────────────────────────────
 //  LOADING
 // ─────────────────────────────────────────────────────────────
-function LoadingPage() {
+function LoadingPage({ onCancel }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setSlow(true), 8000); return () => clearTimeout(t); }, []);
   return (
     <div className="setup">
       <style>{STYLE}</style>
       <div style={{textAlign:"center"}}>
-        <div style={{fontFamily:"var(--fd)",fontSize:"1.8rem",color:"var(--gold)",marginBottom:20,letterSpacing:".02em"}}>Net Worth Tracker</div>
-        <div style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)",letterSpacing:".18em",textTransform:"uppercase"}}>Loading…</div>
+        <div style={{fontFamily:"var(--fd)",fontSize:"1.8rem",color:"var(--gold)",marginBottom:16,letterSpacing:".02em"}}>Net Worth Tracker</div>
+        <div style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)",letterSpacing:".18em",textTransform:"uppercase",marginBottom:20}}>Connecting…</div>
+        {slow && onCancel && (
+          <div style={{marginTop:8}}>
+            <div style={{fontFamily:"var(--fm)",fontSize:".7rem",color:"var(--muted2)",marginBottom:12}}>Taking longer than expected.</div>
+            <button onClick={onCancel} style={{background:"none",border:"1px solid var(--border2)",color:"var(--muted2)",fontFamily:"var(--fm)",fontSize:".72rem",padding:"6px 16px",borderRadius:999,cursor:"pointer"}}>Sign out &amp; retry</button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -386,10 +409,16 @@ function LoadingPage() {
 // ─────────────────────────────────────────────────────────────
 function SignInPage({ gsiReady }) {
   const btnRef = useRef(null);
+  const [gsiTimeout, setGsiTimeout] = useState(false);
   useEffect(() => {
     if (!gsiReady || !btnRef.current) return;
     window.google.accounts.id.renderButton(btnRef.current, { theme:"outline", size:"large", shape:"pill", text:"signin_with" });
     window.google.accounts.id.prompt();
+  }, [gsiReady]);
+  useEffect(() => {
+    if (gsiReady) return;
+    const t = setTimeout(() => setGsiTimeout(true), 6000);
+    return () => clearTimeout(t);
   }, [gsiReady]);
   return (
     <div className="setup">
@@ -399,7 +428,12 @@ function SignInPage({ gsiReady }) {
         <div className="setup-sub">Sign in with an authorised Google account to continue.</div>
         {gsiReady
           ? <div ref={btnRef} style={{display:"flex",justifyContent:"center",marginTop:20}}/>
-          : <div style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".8rem",marginTop:20}}>Loading…</div>}
+          : gsiTimeout
+            ? <div style={{fontFamily:"var(--fm)",fontSize:".72rem",color:"var(--muted2)",marginTop:20,lineHeight:1.7}}>
+                Google Sign-In failed to load.<br/>
+                <span style={{color:"var(--muted)"}}>Check your connection or disable any ad blocker, then refresh.</span>
+              </div>
+            : <div style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".8rem",marginTop:20}}>Loading…</div>}
       </div>
     </div>
   );
@@ -2372,8 +2406,18 @@ export default function App() {
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
 
+  const signOut = () => {
+    localStorage.removeItem(AUTH_KEY);
+    localStorage.removeItem("nw_api_url");
+    setIdToken(null);
+    setConnected(false);
+    setConnecting(false);
+    setConnectErr(null);
+    hasAutoConnected.current = false;
+  };
+
   if (!idToken) return <SignInPage gsiReady={gsiReady}/>;
-  if (connecting || (apiUrl && !connected && !connectErr)) return <LoadingPage/>;
+  if (connecting || (apiUrl && !connected && !connectErr)) return <LoadingPage onCancel={signOut}/>;
   if (!connected) return (
     <>
       <style>{STYLE}</style>
