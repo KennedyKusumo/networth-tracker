@@ -155,6 +155,21 @@ const CUR_COLORS = {
   "GBP":"#7eb8a4","USD":"#c8a96e","AUD":"#8ba3c7",
   "SGD":"#b07eb8","IDR":"#d4845a","CNY":"#e07070",
 };
+const CF_INCOME_CATS  = ["Salary","Freelance / Contract","Rental Income","Dividends / Interest","Benefits","Pension","Other Income"];
+const CF_EXPENSE_CATS = ["Rent / Mortgage","Utilities","Groceries","Transport","Subscriptions","Insurance","Healthcare","Dining & Entertainment","Education","Childcare","Other"];
+const CF_FREQ = [
+  { value:"daily",       label:"Daily",       mult:365/12 },
+  { value:"weekly",      label:"Weekly",      mult:52/12  },
+  { value:"fortnightly", label:"Fortnightly", mult:26/12  },
+  { value:"monthly",     label:"Monthly",     mult:1      },
+  { value:"annual",      label:"Annual",      mult:1/12   },
+  { value:"one-time",    label:"One-time",    mult:0      },
+];
+const cfMonthly = (cf, toDisplay) => {
+  const freq = CF_FREQ.find(f=>f.value===cf.frequency);
+  if (!freq || freq.mult===0) return 0;
+  return toDisplay(cf.amount * freq.mult, cf.currency);
+};
 
 const polarXY = (cx, cy, r, deg) => {
   const rad = (deg - 90) * Math.PI / 180;
@@ -406,6 +421,34 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .gtgt-edit-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:center;margin-top:6px}
 .hero-input{background:var(--s3);border:1px solid var(--border2);color:var(--text);padding:3px 8px;border-radius:var(--r2);font-family:var(--fm);font-size:.7rem;width:90px;outline:none;transition:border-color .15s}
 .hero-input:focus{border-color:var(--gold)}
+.cf-summary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--r2);overflow:hidden;margin-bottom:20px}
+.cf-summary-cell{background:var(--s2);padding:14px 16px}
+.cf-summary-label{font-family:var(--fm);font-size:.6rem;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:4px}
+.cf-summary-val{font-family:var(--fd);font-size:1.2rem;font-weight:600}
+.cf-summary-sub{font-family:var(--fm);font-size:.68rem;color:var(--muted2);margin-top:3px}
+.cf-section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.cf-section-title{font-family:var(--fm);font-size:.62rem;letter-spacing:.15em;color:var(--muted);text-transform:uppercase}
+.cf-section-total{font-family:var(--fm);font-size:.75rem;font-weight:600}
+.cf-group{margin-bottom:14px}
+.cf-group-label{font-family:var(--fm);font-size:.6rem;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin-bottom:6px}
+.cf-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:9px 14px;border:1px solid var(--border);border-radius:var(--r2);margin-bottom:5px;align-items:center;background:var(--s2);transition:border-color .12s}
+.cf-row:hover{border-color:var(--border2)}
+.cf-row-left{min-width:0}
+.cf-row-name{font-size:.82rem;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cf-row-meta{font-family:var(--fm);font-size:.65rem;color:var(--muted2);margin-top:2px}
+.cf-row-freq{font-family:var(--fm);font-size:.62rem;color:var(--muted);background:var(--s3);border-radius:999px;padding:2px 8px;white-space:nowrap}
+.cf-row-amount{font-family:var(--fm);font-size:.8rem;font-weight:600;text-align:right;white-space:nowrap}
+.cf-row-actions{display:flex;gap:3px;opacity:0;transition:opacity .12s}
+.cf-row:hover .cf-row-actions{opacity:1}
+.cf-ot-badge{font-family:var(--fm);font-size:.6rem;padding:1px 7px;border-radius:999px;border:1px solid;white-space:nowrap}
+.cf-type-toggle{display:flex;border:1px solid var(--border2);border-radius:var(--r2);overflow:hidden;margin-bottom:14px}
+.cf-type-btn{flex:1;padding:8px 0;font-family:var(--fm);font-size:.72rem;border:none;cursor:pointer;transition:all .15s;letter-spacing:.04em}
+.cf-freq-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
+.cf-freq-opt{padding:6px 0;font-family:var(--fm);font-size:.68rem;border:1px solid var(--border2);border-radius:var(--r2);cursor:pointer;text-align:center;transition:all .15s;background:none;color:var(--muted2)}
+.cf-freq-opt:hover{border-color:var(--muted2);color:var(--text)}
+.cf-freq-opt.on{border-color:var(--gold);color:var(--gold);background:var(--s3)}
+.cf-hero-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:6px;font-family:var(--fm);font-size:.7rem}
+.cf-rate-pill{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-family:var(--fm);font-size:.65rem;font-weight:600}
 `;
 
 // ─────────────────────────────────────────────────────────────
@@ -967,7 +1010,7 @@ function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, on
 // ─────────────────────────────────────────────────────────────
 //  OVERVIEW PAGE
 // ─────────────────────────────────────────────────────────────
-function OverviewPage({ accounts, milestones, targets, baselineId, displayCurrency, toDisplay, excluded, onToggleExcluded, onSaveMilestone, onSetBaseline, growthTarget, onSetGrowthTarget }) {
+function OverviewPage({ accounts, milestones, targets, baselineId, displayCurrency, toDisplay, excluded, onToggleExcluded, onSaveMilestone, onSetBaseline, growthTarget, onSetGrowthTarget, netMonthlyCashflow }) {
   const [showSaveDlg, setShowSaveDlg] = useState(false);
   const [rateUnit, setRateUnit] = useState('ann'); // 'ann'|'mo'|'day'
   const [elapsedUnit, setElapsedUnit] = useState('day'); // 'day'|'mo'|'yr'
@@ -1198,6 +1241,33 @@ function OverviewPage({ accounts, milestones, targets, baselineId, displayCurren
             </button>
           </div>
         )}
+
+        {/* Cashflow savings rate indicator */}
+        {netMonthlyCashflow!=null && (()=>{
+          const annualSavings = netMonthlyCashflow * 12;
+          const tgtAnn = growthTarget?.amount ?? null;
+          const diff = tgtAnn!=null ? annualSavings - tgtAnn : null;
+          const pct = s.total>0 ? netMonthlyCashflow/s.total*100 : null;
+          // status: green if within 0-10% short or ahead, amber if 10-30% short, red if >30% short
+          const status = diff==null ? null : diff>=0?"pos":diff>=-tgtAnn*0.1?"pos":diff>=-tgtAnn*0.3?"warn":"neg";
+          return (
+            <div className="cf-hero-row">
+              <span style={{color:"var(--muted)"}}>Cash</span>
+              <span style={{color:netMonthlyCashflow>=0?"var(--pos)":"var(--neg)",fontWeight:500}}>
+                {netMonthlyCashflow>=0?"+":""}{fmt(netMonthlyCashflow,displayCurrency,true)}/mo
+              </span>
+              {pct!=null&&<span style={{color:"var(--muted2)",fontSize:".65rem"}}>({pct.toFixed(1)}% of NW p.a.)</span>}
+              {diff!=null&&(
+                <span className="cf-rate-pill" style={{
+                  background:status==="pos"?"rgba(111,181,162,.15)":status==="warn"?"rgba(200,169,110,.15)":"rgba(217,107,107,.15)",
+                  color:status==="pos"?"var(--pos)":status==="warn"?"var(--gold)":"var(--neg)",
+                }}>
+                  {diff>=0?"✓ on track":`✗ ${fmt(Math.abs(diff),displayCurrency,true)}/yr short`}
+                </span>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Nearest upcoming target (from Targets page) */}
         {(()=>{
@@ -1944,10 +2014,12 @@ const solveRequiredRate = (start, monthlyContrib, target, months) => {
 // ─────────────────────────────────────────────────────────────
 //  MODEL PAGE  (Phase 3 · What-If)
 // ─────────────────────────────────────────────────────────────
-function ModelPage({ currentNW, targets, historicalRate, displayCurrency }) {
+function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMonthlyCashflow }) {
   const defaultRate = historicalRate != null ? Math.round(historicalRate * 1000) / 10 : 7;
   const [rateInput, setRateInput] = useState(String(defaultRate));
-  const [monthly, setMonthly] = useState(0);
+  const cfDefault = netMonthlyCashflow!=null ? Math.max(0, Math.round(netMonthlyCashflow)) : 0;
+  const [monthly, setMonthly] = useState(cfDefault);
+  const [monthlyOverridden, setMonthlyOverridden] = useState(false);
   const [horizon, setHorizon] = useState(120);
   const [showScenarios, setShowScenarios] = useState(false);
   const svgRef = useRef(null);
@@ -2028,9 +2100,16 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency }) {
             <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
               <input className="input" type="number" min="0" step="100"
                 style={{flex:1,padding:"4px 8px",fontSize:".8rem"}}
-                value={monthly} onChange={e=>setMonthly(Number(e.target.value)||0)}/>
+                value={monthly} onChange={e=>{setMonthly(Number(e.target.value)||0);setMonthlyOverridden(true);}}/>
               <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>{displayCurrency}/mo</span>
             </div>
+            {netMonthlyCashflow!=null&&(
+              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:4,display:"flex",alignItems:"center",gap:6}}>
+                From cashflow: {fmt(Math.max(0,Math.round(netMonthlyCashflow)),displayCurrency,true)}/mo
+                {monthlyOverridden&&<button onClick={()=>{setMonthly(cfDefault);setMonthlyOverridden(false);}}
+                  style={{background:"none",border:"none",padding:0,cursor:"pointer",color:"var(--gold)",fontSize:".62rem"}}>↺ reset</button>}
+              </div>
+            )}
           </div>
         </div>
         <div style={{marginTop:12,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
@@ -2166,6 +2245,331 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  CASHFLOW MODAL
+// ─────────────────────────────────────────────────────────────
+function CashflowModal({ initial, displayCurrency, existingCats, onSave, onClose }) {
+  const editing = !!initial;
+  const [type, setType]         = useState(initial?.type||"income");
+  const [name, setName]         = useState(initial?.name||"");
+  const [amount, setAmount]     = useState(initial?.amount!=null?String(initial.amount):"");
+  const [currency, setCurrency] = useState(initial?.currency||displayCurrency);
+  const [category, setCategory] = useState(initial?.category||"");
+  const [frequency, setFrequency] = useState(initial?.frequency||"monthly");
+  const [date, setDate]         = useState(initial?.date ? new Date(Number(initial.date)).toISOString().slice(0,10) : "");
+  const [startDate, setStartDate] = useState(initial?.startDate ? new Date(Number(initial.startDate)).toISOString().slice(0,10) : "");
+  const [endDate, setEndDate]   = useState(initial?.endDate ? new Date(Number(initial.endDate)).toISOString().slice(0,10) : "");
+  const [notes, setNotes]       = useState(initial?.notes||"");
+
+  const predefined = type==="income" ? CF_INCOME_CATS : CF_EXPENSE_CATS;
+  const customCats = (existingCats||[]).filter(c=>!predefined.includes(c));
+  const allCats = [...predefined, ...customCats];
+  const isOneTime = frequency==="one-time";
+
+  const save = () => {
+    if (!name.trim()||!amount||isNaN(Number(amount))) return;
+    onSave({
+      id: initial?.id||uid(), name:name.trim(), type, amount:Number(amount),
+      currency, category: category||predefined[0], frequency,
+      date:      isOneTime&&date      ? new Date(date).getTime()      : null,
+      startDate: !isOneTime&&startDate ? new Date(startDate).getTime() : null,
+      endDate:   !isOneTime&&endDate   ? new Date(endDate).getTime()   : null,
+      notes: notes.trim(),
+    });
+  };
+
+  return (
+    <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)onClose()}}>
+      <div className="modal" style={{maxWidth:460}}>
+        <button className="modal-close" onClick={onClose}>✕</button>
+        <div className="modal-title">{editing?"Edit":"Add"} Cashflow</div>
+
+        {/* Income / Expense toggle */}
+        <div className="cf-type-toggle">
+          <button className="cf-type-btn" onClick={()=>setType("income")}
+            style={{background:type==="income"?"var(--pos)":"var(--s2)",color:type==="income"?"#fff":"var(--muted)"}}>
+            ▲ Income
+          </button>
+          <button className="cf-type-btn" onClick={()=>setType("expense")}
+            style={{background:type==="expense"?"var(--neg)":"var(--s2)",color:type==="expense"?"#fff":"var(--muted)"}}>
+            ▼ Expense
+          </button>
+        </div>
+
+        <div className="label">Name</div>
+        <input className="input" style={{marginBottom:12}} placeholder="e.g. Monthly salary"
+          value={name} onChange={e=>setName(e.target.value)} autoFocus/>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,marginBottom:12}}>
+          <div>
+            <div className="label">Amount</div>
+            <input className="input" type="number" min="0" step="any"
+              value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00"/>
+          </div>
+          <div>
+            <div className="label">Currency</div>
+            <select className="input" value={currency} onChange={e=>setCurrency(e.target.value)}>
+              {CURRENCIES.map(c=><option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="label">Category</div>
+        <input className="input" style={{marginBottom:12}} list="cf-cats"
+          value={category} onChange={e=>setCategory(e.target.value)}
+          placeholder={type==="income"?"e.g. Salary":"e.g. Rent / Mortgage"}/>
+        <datalist id="cf-cats">
+          {allCats.map(c=><option key={c} value={c}/>)}
+        </datalist>
+
+        <div className="label">Frequency</div>
+        <div className="cf-freq-grid" style={{marginBottom:14}}>
+          {CF_FREQ.map(f=>(
+            <button key={f.value} className={`cf-freq-opt${frequency===f.value?" on":""}`}
+              onClick={()=>setFrequency(f.value)}>{f.label}</button>
+          ))}
+        </div>
+
+        {isOneTime ? (
+          <>
+            <div className="label">Date</div>
+            <input className="input" type="date" style={{marginBottom:12}}
+              value={date} onChange={e=>setDate(e.target.value)}/>
+          </>
+        ) : (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div>
+              <div className="label">Start date <span style={{color:"var(--muted)",fontWeight:400}}>(optional)</span></div>
+              <input className="input" type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/>
+            </div>
+            <div>
+              <div className="label">End date <span style={{color:"var(--muted)",fontWeight:400}}>(optional)</span></div>
+              <input className="input" type="date" value={endDate} onChange={e=>setEndDate(e.target.value)}/>
+            </div>
+          </div>
+        )}
+
+        <div className="label">Notes <span style={{color:"var(--muted)",fontWeight:400}}>(optional)</span></div>
+        <textarea className="input" rows={2} style={{resize:"vertical",marginBottom:16}}
+          value={notes} onChange={e=>setNotes(e.target.value)}/>
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary btn-sm"
+            onClick={save} disabled={!name.trim()||!amount||isNaN(Number(amount))}>
+            {editing?"Save Changes":"Add"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CASHFLOW PAGE
+// ─────────────────────────────────────────────────────────────
+function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, onDelete }) {
+  const [modal, setModal] = useState(null); // null | "add-income" | "add-expense" | {cf} for edit
+  const [confirmDel, setConfirmDel] = useState(null);
+  const now = Date.now();
+
+  // Derive custom categories from existing cashflows
+  const existingCats = useMemo(() => {
+    const pre = new Set([...CF_INCOME_CATS,...CF_EXPENSE_CATS]);
+    return [...new Set(cashflows.map(c=>c.category).filter(c=>c&&!pre.has(c)))];
+  }, [cashflows]);
+
+  // Active recurring cashflows (not one-time, not expired, not future)
+  const active = useMemo(()=>cashflows.filter(cf=>{
+    if (cf.frequency==="one-time") return false;
+    if (cf.endDate   && Number(cf.endDate)   < now) return false;
+    if (cf.startDate && Number(cf.startDate) > now) return false;
+    return true;
+  }),[cashflows,now]);
+
+  const income   = active.filter(c=>c.type==="income");
+  const expenses = active.filter(c=>c.type==="expense");
+  const oneTimes = cashflows.filter(c=>c.frequency==="one-time")
+    .sort((a,b)=>Number(b.date||0)-Number(a.date||0));
+
+  const totalIn  = income.reduce((s,c)=>s+cfMonthly(c,toDisplay),0);
+  const totalOut = expenses.reduce((s,c)=>s+cfMonthly(c,toDisplay),0);
+  const net      = totalIn - totalOut;
+  const saveRate = totalIn>0 ? net/totalIn*100 : null;
+
+  // Group expenses by category
+  const expGroups = useMemo(()=>{
+    const map = {};
+    expenses.forEach(c=>{
+      const cat = c.category||"Other";
+      if (!map[cat]) map[cat]=[];
+      map[cat].push(c);
+    });
+    // Sort groups by total desc
+    return Object.entries(map)
+      .map(([cat,items])=>({cat,items,total:items.reduce((s,c)=>s+cfMonthly(c,toDisplay),0)}))
+      .sort((a,b)=>b.total-a.total);
+  },[expenses,toDisplay]);
+
+  const freqLabel = f => CF_FREQ.find(x=>x.value===f)?.label||f;
+  const fmtShort = ts => ts ? new Date(Number(ts)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : null;
+
+  const openModal = (initialType) => setModal({_new: true, type: initialType});
+
+  const handleSave = cf => {
+    if (modal?._new) onAdd(cf);
+    else onUpdate(cf);
+    setModal(null);
+  };
+
+  const CfRow = ({cf}) => {
+    const monthly = cfMonthly(cf, toDisplay);
+    const isIncome = cf.type==="income";
+    const expired = cf.endDate && Number(cf.endDate) < now;
+    const future  = cf.startDate && Number(cf.startDate) > now;
+    return (
+      <div className="cf-row" style={{opacity:expired?0.45:1}}>
+        <div className="cf-row-left">
+          <div className="cf-row-name">{cf.name}{expired&&<span style={{marginLeft:6,fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)"}}>(ended)</span>}{future&&<span style={{marginLeft:6,fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)"}}>(starts {fmtShort(cf.startDate)})</span>}</div>
+          <div className="cf-row-meta">{cf.category}{cf.currency!==displayCurrency?` · ${cf.currency}`:""}</div>
+        </div>
+        <span className="cf-row-freq">{freqLabel(cf.frequency)}</span>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span className="cf-row-amount" style={{color:isIncome?"var(--pos)":"var(--neg)"}}>
+            {isIncome?"+":"-"}{fmt(cfMonthly(cf,toDisplay),displayCurrency,true)}<span style={{fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)",fontWeight:400}}>/mo</span>
+          </span>
+          <div className="cf-row-actions">
+            <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px"}} onClick={()=>setModal(cf)}>✎</button>
+            {confirmDel===cf.id
+              ? <><button className="btn btn-xs" style={{background:"var(--neg)",border:"none",color:"#fff",padding:"1px 7px"}} onClick={()=>{onDelete(cf.id);setConfirmDel(null)}}>Delete</button>
+                  <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px"}} onClick={()=>setConfirmDel(null)}>✕</button></>
+              : <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px",color:"var(--muted)"}} onClick={()=>setConfirmDel(cf.id)}>✕</button>
+            }
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="page">
+      {/* Summary */}
+      <div className="cf-summary">
+        <div className="cf-summary-cell">
+          <div className="cf-summary-label">Monthly In</div>
+          <div className="cf-summary-val" style={{color:"var(--pos)"}}>{fmt(totalIn,displayCurrency,true)}</div>
+          <div className="cf-summary-sub">{income.length} stream{income.length!==1?"s":""}</div>
+        </div>
+        <div className="cf-summary-cell">
+          <div className="cf-summary-label">Monthly Out</div>
+          <div className="cf-summary-val" style={{color:"var(--neg)"}}>{fmt(totalOut,displayCurrency,true)}</div>
+          <div className="cf-summary-sub">{expenses.length} expense{expenses.length!==1?"s":""}</div>
+        </div>
+        <div className="cf-summary-cell">
+          <div className="cf-summary-label">Net / Saving rate</div>
+          <div className="cf-summary-val" style={{color:net>=0?"var(--pos)":"var(--neg)"}}>{net>=0?"+":""}{fmt(net,displayCurrency,true)}</div>
+          <div className="cf-summary-sub">{saveRate!=null?`${saveRate.toFixed(0)}% of income`:"—"}</div>
+        </div>
+      </div>
+
+      {/* Add buttons */}
+      <div style={{display:"flex",gap:8,marginBottom:20}}>
+        <button className="btn btn-sm" style={{flex:1,borderColor:"var(--pos)",color:"var(--pos)"}} onClick={()=>openModal("income")}>+ Add Income</button>
+        <button className="btn btn-sm" style={{flex:1,borderColor:"var(--neg)",color:"var(--neg)"}} onClick={()=>openModal("expense")}>+ Add Expense</button>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setModal({_new:true,type:"expense",frequency:"one-time"})}>+ One-time</button>
+      </div>
+
+      {/* Income */}
+      {(income.length>0||cashflows.some(c=>c.type==="income"&&c.frequency!=="one-time")) && (
+        <div style={{marginBottom:20}}>
+          <div className="cf-section-head">
+            <span className="cf-section-title">Income</span>
+            <span className="cf-section-total" style={{color:"var(--pos)"}}>+{fmt(totalIn,displayCurrency,true)}/mo</span>
+          </div>
+          {[...income].sort((a,b)=>cfMonthly(b,toDisplay)-cfMonthly(a,toDisplay)).map(cf=><CfRow key={cf.id} cf={cf}/>)}
+          {/* Inactive income */}
+          {cashflows.filter(c=>c.type==="income"&&c.frequency!=="one-time"&&!income.includes(c))
+            .map(cf=><CfRow key={cf.id} cf={cf}/>)}
+        </div>
+      )}
+
+      {/* Expenses */}
+      {(expenses.length>0||cashflows.some(c=>c.type==="expense"&&c.frequency!=="one-time")) && (
+        <div style={{marginBottom:20}}>
+          <div className="cf-section-head">
+            <span className="cf-section-title">Expenses</span>
+            <span className="cf-section-total" style={{color:"var(--neg)"}}>-{fmt(totalOut,displayCurrency,true)}/mo</span>
+          </div>
+          {expGroups.map(({cat,items,total})=>(
+            <div key={cat} className="cf-group">
+              <div className="cf-group-label" style={{display:"flex",justifyContent:"space-between"}}>
+                <span>{cat}</span><span>{fmt(total,displayCurrency,true)}/mo</span>
+              </div>
+              {[...items].sort((a,b)=>cfMonthly(b,toDisplay)-cfMonthly(a,toDisplay)).map(cf=><CfRow key={cf.id} cf={cf}/>)}
+            </div>
+          ))}
+          {/* Inactive expenses */}
+          {cashflows.filter(c=>c.type==="expense"&&c.frequency!=="one-time"&&!expenses.includes(c))
+            .map(cf=><CfRow key={cf.id} cf={cf}/>)}
+        </div>
+      )}
+
+      {/* One-time items */}
+      {oneTimes.length>0 && (
+        <div style={{marginBottom:20}}>
+          <div className="cf-section-head">
+            <span className="cf-section-title">One-time</span>
+            <span style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)"}}>{oneTimes.length} item{oneTimes.length!==1?"s":""}</span>
+          </div>
+          {oneTimes.map(cf=>{
+            const isPast = cf.date && Number(cf.date)<now;
+            const isIncome = cf.type==="income";
+            return (
+              <div key={cf.id} className="cf-row" style={{opacity:isPast?0.5:1}}>
+                <div className="cf-row-left">
+                  <div className="cf-row-name">{cf.name}</div>
+                  <div className="cf-row-meta">{cf.category}{cf.currency!==displayCurrency?` · ${cf.currency}`:""}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  {cf.date&&<div style={{fontFamily:"var(--fm)",fontSize:".68rem",color:isPast?"var(--muted)":"var(--text)"}}>{fmtShort(cf.date)}</div>}
+                  <span className="cf-ot-badge" style={{color:isIncome?"var(--pos)":"var(--neg)",borderColor:isIncome?"var(--pos)":"var(--neg)"}}>
+                    {isIncome?"+":"-"}{fmt(toDisplay(cf.amount,cf.currency),displayCurrency,true)}
+                  </span>
+                </div>
+                <div className="cf-row-actions">
+                  <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px"}} onClick={()=>setModal(cf)}>✎</button>
+                  {confirmDel===cf.id
+                    ? <><button className="btn btn-xs" style={{background:"var(--neg)",border:"none",color:"#fff",padding:"1px 7px"}} onClick={()=>{onDelete(cf.id);setConfirmDel(null)}}>Delete</button>
+                        <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px"}} onClick={()=>setConfirmDel(null)}>✕</button></>
+                    : <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px",color:"var(--muted)"}} onClick={()=>setConfirmDel(cf.id)}>✕</button>
+                  }
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {cashflows.length===0 && (
+        <div className="empty">
+          <div className="empty-icon">💸</div>
+          Track your income and expenses to see your monthly cashflow.
+        </div>
+      )}
+
+      {modal && (
+        <CashflowModal
+          initial={modal._new ? {type:modal.type||"income",frequency:modal.frequency||"monthly"} : modal}
+          displayCurrency={displayCurrency}
+          existingCats={existingCats}
+          onSave={handleSave}
+          onClose={()=>setModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  ROOT APP
 // ─────────────────────────────────────────────────────────────
 const IS_LOCAL_DEV = import.meta.env.DEV;
@@ -2186,6 +2590,7 @@ export default function App() {
   const [growthTarget, setGrowthTarget] = useState(null);
   const [milestones, setMilestones] = useState([]);
   const [targets, setTargets] = useState([]);
+  const [cashflows, setCashflows] = useState([]);
   const [baselineId, setBaselineId] = useState(null);
   const [displayCurrency, setDisplayCurrency] = useState("GBP");
   const [excluded, setExcluded] = useState(new Set());
@@ -2259,6 +2664,7 @@ export default function App() {
       setAccounts((data.accounts||[]).map(a=>({...a, vesting: vestMap[a.id]||null})));
       setMilestones(data.milestones||[]);
       setTargets(data.targets||[]);
+      setCashflows(data.cashflows||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
@@ -2280,6 +2686,7 @@ export default function App() {
       setAccounts((data.accounts||[]).map(a=>({...a, vesting: vestMap[a.id]||null})));
       setMilestones(data.milestones||[]);
       setTargets(data.targets||[]);
+      setCashflows(data.cashflows||[]);
       setBaselineId(data.baselineId||null);
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
@@ -2434,6 +2841,21 @@ export default function App() {
     try { await api.current.call("deleteTarget", {id}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+  const addCashflow = async (cf) => {
+    setCashflows(p=>[...p,cf]); showToast("Cashflow added");
+    try { await api.current.callWithData("addCashflow", cf); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
+  const updateCashflow = async (cf) => {
+    setCashflows(p=>p.map(x=>x.id===cf.id?cf:x)); showToast("Cashflow updated");
+    try { await api.current.callWithData("updateCashflow", cf); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
+  const deleteCashflow = async (id) => {
+    setCashflows(p=>p.filter(x=>x.id!==id)); showToast("Cashflow removed","warn");
+    try { await api.current.call("deleteCashflow", {id}); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
   const setBaseline = async (id) => {
     setBaselineId(id); showToast(id?"Baseline set":"Baseline cleared");
     try { await api.current.call("setBaseline", {id: id||""}); }
@@ -2493,6 +2915,7 @@ export default function App() {
           {[
             ["overview","Overview"],
             ["accounts",`Accounts (${accounts.length})`],
+            ["cash","Cash"],
             ["milestones",`Milestones (${milestones.length})`],
             ["targets",`Targets (${targets.length})`],
             ["model","Model"],
@@ -2522,12 +2945,21 @@ export default function App() {
             if(el<7/365.25) return null;
             return (currentNW/baseConverted)**(1/el)-1;
           })();
+          const nowTs = Date.now();
+          const netMonthlyCashflow = cashflows.reduce((sum,cf)=>{
+            if (cf.frequency==="one-time") return sum;
+            if (cf.endDate   && Number(cf.endDate)   < nowTs) return sum;
+            if (cf.startDate && Number(cf.startDate) > nowTs) return sum;
+            const m = cfMonthly(cf, toDisplay);
+            return sum + (cf.type==="income" ? m : -m);
+          }, 0);
           return <>
-            {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone} onSetBaseline={setBaseline} growthTarget={growthTarget} onSetGrowthTarget={saveGrowthTargetSetting}/>}
+            {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone} onSetBaseline={setBaseline} growthTarget={growthTarget} onSetGrowthTarget={saveGrowthTargetSetting} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
             {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} onDeleteRecord={deleteRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
             {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
             {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
-            {page==="model"&&<ModelPage currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency}/>}
+            {page==="model"&&<ModelPage currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
+            {page==="cash"&&<CashflowPage cashflows={cashflows} displayCurrency={displayCurrency} toDisplay={toDisplay} onAdd={addCashflow} onUpdate={updateCashflow} onDelete={deleteCashflow}/>}
           </>;
         })()}
       </div>
