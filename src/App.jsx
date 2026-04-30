@@ -294,10 +294,21 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .hist-summary-val{font-family:var(--fd);font-size:1.3rem;font-weight:600;line-height:1.1}
 .hist-summary-conv{font-family:var(--fm);font-size:.68rem;color:var(--muted2);margin-top:3px}
 .hist-table-wrap{max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r2);margin-bottom:4px}
-.hist-table-head{display:grid;grid-template-columns:1fr auto auto;gap:12px;padding:7px 12px;background:var(--s3);font-family:var(--fm);font-size:.62rem;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);position:sticky;top:0}
-.hist-row{display:grid;grid-template-columns:1fr auto auto;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border);align-items:center}
+.hist-table-head{display:grid;grid-template-columns:1fr auto auto 18px;gap:12px;padding:7px 12px;background:var(--s3);font-family:var(--fm);font-size:.62rem;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);position:sticky;top:0}
+.hist-row{display:grid;grid-template-columns:1fr auto auto 18px;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border);align-items:center}
 .hist-row:last-child{border-bottom:none}
 .hist-row:hover{background:var(--s2)}
+.hist-del-btn{display:flex;align-items:center;justify-content:center;width:18px;height:18px;border:none;background:none;color:var(--muted);cursor:pointer;border-radius:3px;padding:0;font-size:.75rem;opacity:0;transition:opacity .15s,color .15s}
+.hist-row:hover .hist-del-btn{opacity:1}
+.hist-del-btn:hover{color:var(--neg)!important}
+.hist-row-confirm{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);background:rgba(217,107,107,.07)}
+.hist-row-confirm:last-child{border-bottom:none}
+.hist-confirm-label{font-family:var(--fm);font-size:.7rem;color:var(--neg);flex:1}
+.hist-confirm-btn{font-family:var(--fm);font-size:.65rem;padding:2px 10px;border-radius:999px;cursor:pointer;border:1px solid;transition:all .15s}
+.hist-confirm-yes{background:var(--neg);border-color:var(--neg);color:#fff}
+.hist-confirm-yes:hover{opacity:.85}
+.hist-confirm-no{background:none;border-color:var(--border2);color:var(--muted2)}
+.hist-confirm-no:hover{border-color:var(--muted2);color:var(--text)}
 .hist-date{font-family:var(--fm);font-size:.72rem;color:var(--muted2)}
 .hist-delta{font-family:var(--fm);font-size:.72rem;font-weight:500;text-align:right;min-width:70px}
 .hist-amount{font-family:var(--fm);font-size:.78rem;font-weight:600;text-align:right;min-width:90px}
@@ -1387,9 +1398,10 @@ function BalanceChart({ records, currency, isLiability }) {
 // ─────────────────────────────────────────────────────────────
 //  ACCOUNT HISTORY MODAL
 // ─────────────────────────────────────────────────────────────
-function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBalance, onEdit, onClose }) {
+function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBalance, onEdit, onDeleteRecord, onClose }) {
   const isLiability = account.type === "liability";
   const accentColor = isLiability ? "var(--neg)" : "var(--gold)";
+  const [confirmingDelete, setConfirmingDelete] = useState(null); // record id
   const sorted = useMemo(()=>
     [...(account.records||[])].sort((a,b)=>Number(b.ts)-Number(a.ts))
   ,[account.records]);
@@ -1488,8 +1500,18 @@ function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBala
               <span>Date</span>
               <span style={{textAlign:"right"}}>Change</span>
               <span style={{textAlign:"right"}}>Balance</span>
+              <span/>
             </div>
             {sorted.map((r,i)=>{
+              if (confirmingDelete === r.id) {
+                return (
+                  <div className="hist-row-confirm" key={r.id||i}>
+                    <span className="hist-confirm-label">Delete {fmtDate(r.ts)} entry ({fmt(r.amount,account.currency)})?</span>
+                    <button className="hist-confirm-btn hist-confirm-yes" onClick={()=>{onDeleteRecord(account.id,r.id);setConfirmingDelete(null)}}>Delete</button>
+                    <button className="hist-confirm-btn hist-confirm-no" onClick={()=>setConfirmingDelete(null)}>Cancel</button>
+                  </div>
+                );
+              }
               const prev = sorted[i+1]; // older record
               const delta = prev ? Number(r.amount)-Number(prev.amount) : null;
               return (
@@ -1499,6 +1521,7 @@ function AccountHistoryModal({ account, displayCurrency, toDisplay, onUpdateBala
                     {delta===null?"—":( (delta>0?"+":"")+fmt(delta,account.currency,true) )}
                   </span>
                   <span className="hist-amount" style={{color:accentColor}}>{fmt(r.amount,account.currency)}</span>
+                  <button className="hist-del-btn" title="Delete this entry" onClick={()=>setConfirmingDelete(r.id)}>✕</button>
                 </div>
               );
             })}
@@ -1635,7 +1658,7 @@ function SortableAccountCard({ acc, ...cardProps }) {
 // ─────────────────────────────────────────────────────────────
 //  ACCOUNTS PAGE
 // ─────────────────────────────────────────────────────────────
-function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggleExcluded, onAdd, onUpdate, onDelete, onRecord, accountOrder, onReorder }) {
+function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggleExcluded, onAdd, onUpdate, onDelete, onRecord, onDeleteRecord, accountOrder, onReorder }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const [recording, setRecording] = useState(null);
@@ -1705,6 +1728,7 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
         displayCurrency={displayCurrency} toDisplay={toDisplay}
         onUpdateBalance={()=>{setRecording(accounts.find(a=>a.id===viewing.id)||viewing);setViewing(null)}}
         onEdit={()=>{setEditing(accounts.find(a=>a.id===viewing.id)||viewing);setViewing(null)}}
+        onDeleteRecord={onDeleteRecord}
         onClose={()=>setViewing(null)}
       />}
     </div>
@@ -2377,6 +2401,12 @@ export default function App() {
     try { await api.current.callWithData("addRecord", rec); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+  const deleteRecord = async (accountId, recordId) => {
+    setAccounts(p=>p.map(a=>a.id===accountId?{...a,records:(a.records||[]).filter(r=>r.id!==recordId)}:a));
+    showToast("Record deleted","warn");
+    try { await api.current.call("deleteRecord", {id:recordId}); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
   const saveMilestone = async ({label, ts, summary}) => {
     const m={id:uid(),ts:ts||Date.now(),label:label||"",summary};
     setMilestones(p=>[...p,m]); showToast("Milestone saved!");
@@ -2494,7 +2524,7 @@ export default function App() {
           })();
           return <>
             {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone} onSetBaseline={setBaseline} growthTarget={growthTarget} onSetGrowthTarget={saveGrowthTargetSetting}/>}
-            {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
+            {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} onDeleteRecord={deleteRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
             {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
             {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
             {page==="model"&&<ModelPage currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency}/>}
