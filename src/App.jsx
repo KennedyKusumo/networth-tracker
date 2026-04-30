@@ -151,6 +151,10 @@ const CLS_COLORS = {
   "cash-savings":"#7eb8a4","investments":"#c8a96e",
   "retirement":"#8ba3c7","property":"#b07eb8","debt":"#e07070",
 };
+const CUR_COLORS = {
+  "GBP":"#7eb8a4","USD":"#c8a96e","AUD":"#8ba3c7",
+  "SGD":"#b07eb8","IDR":"#d4845a","CNY":"#e07070",
+};
 
 const polarXY = (cx, cy, r, deg) => {
   const rad = (deg - 90) * Math.PI / 180;
@@ -379,6 +383,18 @@ html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:va
 .slider::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--gold);cursor:pointer;border:2px solid var(--bg)}
 .slider::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--gold);cursor:pointer;border:2px solid var(--bg)}
 .scenario-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+/* ── Overview redesign ── */
+.hero-baseline-row{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;flex-wrap:wrap}
+.hero-sel{appearance:none;-webkit-appearance:none;background:var(--s3);border:1px solid var(--border2);color:var(--muted2);padding:3px 10px;border-radius:999px;font-family:var(--fm);font-size:.65rem;cursor:pointer;outline:none;transition:border-color .15s;max-width:180px;text-overflow:ellipsis}
+.hero-sel:focus,.hero-sel:hover{border-color:var(--gold);color:var(--gold)}
+.alloc-tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+.alloc-tab{background:none;border:1px solid var(--border2);color:var(--muted);font-family:var(--fm);font-size:.62rem;padding:3px 10px;border-radius:999px;cursor:pointer;transition:all .15s;letter-spacing:.04em;white-space:nowrap}
+.alloc-tab:hover{border-color:var(--muted2);color:var(--text)}
+.alloc-tab.on{background:var(--s3);border-color:var(--gold);color:var(--gold)}
+.gtgt-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:6px;font-family:var(--fm);font-size:.7rem}
+.gtgt-edit-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:center;margin-top:6px}
+.hero-input{background:var(--s3);border:1px solid var(--border2);color:var(--text);padding:3px 8px;border-radius:var(--r2);font-family:var(--fm);font-size:.7rem;width:90px;outline:none;transition:border-color .15s}
+.hero-input:focus{border-color:var(--gold)}
 `;
 
 // ─────────────────────────────────────────────────────────────
@@ -497,20 +513,19 @@ function Pill({label, color}) {
 // ─────────────────────────────────────────────────────────────
 //  DONUT CHART
 // ─────────────────────────────────────────────────────────────
-function DonutChart({ byCls, displayCurrency }) {
+// segments: [{key, label, value, color}] — values must be positive, in displayCurrency units for sizing
+function DonutChart({ segments, displayCurrency }) {
   const [hov, setHov] = useState(null);
   const cx=88, cy=88, outerR=70, innerR=46;
 
-  const entries = CLASS_OPTIONS
-    .map(o => ({ ...o, val: byCls[o.value]||0, color: CLS_COLORS[o.value]||"#888" }))
-    .filter(e => e.val > 0);
-  const posTotal = entries.reduce((s,e)=>s+e.val,0);
+  const entries = (segments||[]).filter(e => e.value > 0);
+  const posTotal = entries.reduce((s,e)=>s+e.value, 0);
 
-  if (!posTotal) return <div className="chart-empty">No asset data yet</div>;
+  if (!posTotal) return <div className="chart-empty">No data yet</div>;
 
   let angle=-90;
   const segs = entries.map(e => {
-    const sweep = (e.val/posTotal)*360;
+    const sweep = (e.value/posTotal)*360;
     const gap = entries.length>1 ? 1.2 : 0;
     const seg = { ...e, sa: angle+gap/2, ea: angle+sweep-gap/2 };
     angle += sweep;
@@ -529,13 +544,13 @@ function DonutChart({ byCls, displayCurrency }) {
             onMouseEnter={()=>setHov(i)} onMouseLeave={()=>setHov(null)}/>
         ))}
         <text x={cx} y={cy-10} textAnchor="middle" style={{fontFamily:"var(--fd)",fontSize:"13px",fill:"var(--gold)",fontWeight:600}}>
-          {fmt(active?active.val:posTotal, displayCurrency, true)}
+          {fmt(active?active.value:posTotal, displayCurrency, true)}
         </text>
         <text x={cx} y={cy+5} textAnchor="middle" style={{fontFamily:"var(--fm)",fontSize:"7px",fill:"var(--muted)",letterSpacing:".1em",textTransform:"uppercase"}}>
-          {active?active.label:"Total Assets"}
+          {active?active.label:"Total"}
         </text>
         {active&&<text x={cx} y={cy+18} textAnchor="middle" style={{fontFamily:"var(--fm)",fontSize:"9px",fill:"var(--muted2)"}}>
-          {((active.val/posTotal)*100).toFixed(1)}%
+          {((active.value/posTotal)*100).toFixed(1)}%
         </text>}
       </svg>
     </div>
@@ -941,23 +956,26 @@ function SaveMilestoneModal({ accounts, displayCurrency, toDisplay, excluded, on
 // ─────────────────────────────────────────────────────────────
 //  OVERVIEW PAGE
 // ─────────────────────────────────────────────────────────────
-function OverviewPage({ accounts, milestones, targets, baselineId, displayCurrency, rates, toDisplay, excluded, onToggleExcluded, onSaveMilestone }) {
+function OverviewPage({ accounts, milestones, targets, baselineId, displayCurrency, toDisplay, excluded, onToggleExcluded, onSaveMilestone, onSetBaseline, growthTarget, onSetGrowthTarget }) {
   const [showSaveDlg, setShowSaveDlg] = useState(false);
-  const [rateUnit, setRateUnit] = useState('ann'); // 'ann' | 'mo' | 'day'
+  const [rateUnit, setRateUnit] = useState('ann'); // 'ann'|'mo'|'day'
+  const [elapsedUnit, setElapsedUnit] = useState('day'); // 'day'|'mo'|'yr'
+  const [allocTab, setAllocTab] = useState('class');
+  const [editingGrowth, setEditingGrowth] = useState(false);
+  const [growthInput, setGrowthInput] = useState('');
+
   const cycleRate = () => setRateUnit(u => u==='ann'?'mo':u==='mo'?'day':'ann');
-  const rateLabel = rateUnit==='ann'?'p.a.':rateUnit==='mo'?'/mo':'/day';
+  const cycleElapsed = () => setElapsedUnit(u => u==='day'?'mo':u==='mo'?'yr':'day');
   const rateUnitShort = rateUnit==='ann'?'yr':rateUnit==='mo'?'mo':'day';
   const toRate = ann => rateUnit==='ann' ? ann : rateUnit==='mo' ? (1+ann)**(1/12)-1 : (1+ann)**(1/365.25)-1;
-  const [targetRate, setTargetRate] = useState(null); // annual decimal, e.g. 0.05 = 5% p.a.
-  const [editingTarget, setEditingTarget] = useState(false);
-  const [targetInput, setTargetInput] = useState('');
-  const visible = accounts.filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`));
-  const hiddenCount = accounts.length - visible.length;
+  const hiddenCount = accounts.filter(a=>excluded.has(a.id)||excluded.has(`cls:${a.class}`)).length;
 
-  const s = (() => {
+  // ── Totals ──────────────────────────────────────────────────
+  const s = useMemo(() => {
     let total=0, assets=0, liabilities=0;
     const byLiq={}, byRisk={}, byCur={}, byCls={};
-    for (const acc of visible) {
+    for (const acc of accounts) {
+      if (excluded.has(acc.id) || excluded.has(`cls:${acc.class}`)) continue;
       const raw = vestedBalance(acc);
       if (raw===null) continue;
       const conv = toDisplay(raw, acc.currency);
@@ -970,82 +988,207 @@ function OverviewPage({ accounts, milestones, targets, baselineId, displayCurren
       if(acc.type==="asset") assets+=conv; else liabilities+=Math.abs(conv);
     }
     return {total,byLiq,byRisk,byCur,byCls,assets,liabilities};
-  })();
+  }, [accounts, excluded, toDisplay]);
 
+  // ── Baseline ─────────────────────────────────────────────────
   const baseline = milestones.find(m=>m.id===baselineId);
-  const baseRaw = baseline?.summary?.total ?? null;
   const baseSavedCur = baseline?.summary?.currency || displayCurrency;
-  const baseTotal = baseRaw!==null ? (baseSavedCur===displayCurrency ? baseRaw : toDisplay(baseRaw, baseSavedCur)) : null;
-  const delta = baseTotal!==null ? s.total - baseTotal : null;
-  const maxAbs = Math.max(...Object.values(s.byCls).map(v=>Math.abs(v)),1);
+  const baseTotal = baseline?.summary?.total != null
+    ? (baseSavedCur===displayCurrency ? baseline.summary.total : toDisplay(baseline.summary.total, baseSavedCur))
+    : null;
+  const delta = baseTotal!=null ? s.total - baseTotal : null;
+  const elapsedMs = baseline ? Date.now() - Number(baseline.ts) : null;
+  const elapsedDays = elapsedMs ? Math.floor(elapsedMs/86400000) : null;
+  const elapsedStr = elapsedDays!=null
+    ? elapsedUnit==='day' ? `${elapsedDays}d`
+    : elapsedUnit==='mo' ? `${(elapsedDays/30.44).toFixed(1)}mo`
+    : `${(elapsedDays/365.25).toFixed(1)}yr`
+    : null;
 
-  const liqMax = Math.max(...Object.values(s.byLiq).map(v=>Math.abs(v)),1);
-  const riskMax = Math.max(...Object.values(s.byRisk).map(v=>Math.abs(v)),1);
+  // ── Growth rate (annualised since baseline) ──────────────────
+  const growthRateAnn = useMemo(() => {
+    if (!baseline || baseTotal==null || baseTotal<=0 || !elapsedMs) return null;
+    const yrs = elapsedMs/(365.25*86400000);
+    if (yrs < 7/365.25) return null;
+    return (s.total/baseTotal)**(1/yrs)-1;
+  }, [baseline, baseTotal, elapsedMs, s.total]);
 
-  // Growth rate from baseline (annualised)
-  const growthRate = (() => {
-    if (!baseline || baseTotal===null || baseTotal<=0) return null;
-    const elapsedYears = (Date.now()-Number(baseline.ts))/(365.25*24*3600*1000);
-    if (elapsedYears < 7/365.25) return null;
-    return { ann: (s.total/baseTotal)**(1/elapsedYears)-1, years: elapsedYears };
-  })();
+  const growthAbsPerUnit = growthRateAnn!=null ? s.total * toRate(growthRateAnn) : null;
+  const growthPctInUnit  = growthRateAnn!=null ? toRate(growthRateAnn)*100 : null;
 
-  // Period performance rows
-  const periodRows = useMemo(() => {
-    const now = Date.now();
-    const yearStart = new Date(new Date().getFullYear(),0,1).getTime();
-    const allTs = accounts.flatMap(a=>(a.records||[]).map(r=>Number(r.ts))).filter(Boolean);
-    const allTimeTs = allTs.length ? Math.min(...allTs) : null;
-    const defs = [
-      { label:'1 Month',  fromTs: now-30*86400000 },
-      { label:'3 Months', fromTs: now-91*86400000 },
-      { label:'6 Months', fromTs: now-182*86400000 },
-      { label:'YTD',      fromTs: yearStart },
-      { label:'1 Year',   fromTs: now-365*86400000 },
-      ...(allTimeTs!==null?[{ label:'All Time', fromTs: allTimeTs }]:[]),
-      ...(baseline?[{ label: baseline.label||'Baseline', fromTs: Number(baseline.ts) }]:[]),
-    ];
-    return defs.map(p=>{
-      const startVal = networthAt(accounts, excluded, p.fromTs, toDisplay);
-      if (startVal===null) return null;
-      const change = s.total-startVal;
-      const changePct = startVal!==0 ? (change/Math.abs(startVal))*100 : null;
-      const elapsedYears = (now-p.fromTs)/(365.25*86400000);
-      const annRate = startVal>0 && s.total>0 && elapsedYears>=7/365.25
-        ? (s.total/startVal)**(1/elapsedYears)-1 : null;
-      return { ...p, startVal, change, changePct, annRate };
-    }).filter(Boolean);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accounts, excluded, s.total, toDisplay, baseline]);
+  // ── Growth target ─────────────────────────────────────────────
+  const growthTargetInUnit = growthTarget
+    ? (rateUnit==='ann' ? growthTarget.amount : rateUnit==='mo' ? growthTarget.amount/12 : growthTarget.amount/365.25)
+    : null;
+  const growthTargetDiff = (growthAbsPerUnit!=null && growthTargetInUnit!=null)
+    ? growthAbsPerUnit - growthTargetInUnit : null;
+
+  const saveGrowthTarget = () => {
+    const v = parseFloat(growthInput);
+    onSetGrowthTarget(!isNaN(v) && v>0 ? {amount:v, currency:displayCurrency} : null);
+    setEditingGrowth(false);
+  };
+
+  // ── Allocation tab data ───────────────────────────────────────
+  const allocData = useMemo(() => {
+    const mkRows = (opts, byMap, colorMap, getDesc) => {
+      const posTotal = Object.values(byMap).filter(v=>v>0).reduce((a,b)=>a+b,0);
+      const maxAbs = Math.max(...Object.values(byMap).map(v=>Math.abs(v)), 1);
+      return {
+        donutSegs: opts.filter(o=>(byMap[o.value]||0)>0)
+          .map(o=>({key:o.value,label:o.label,value:byMap[o.value],color:colorMap[o.value]||'#888'})),
+        rows: opts.filter(o=>byMap[o.value]!==undefined).map(o=>({
+          key:o.value, label:o.label, value:byMap[o.value],
+          color:colorMap[o.value]||'#888',
+          barPct:Math.min(Math.abs(byMap[o.value])/maxAbs*100,100),
+          desc:getDesc?.(o),
+        })),
+        posTotal,
+      };
+    };
+
+    if (allocTab==='liquidity') return mkRows(LIQUIDITY_OPTIONS, s.byLiq, LIQ_COLORS, o=>o.desc);
+    if (allocTab==='risk')      return mkRows(RISK_OPTIONS, s.byRisk, RISK_COLORS, o=>o.desc);
+
+    if (allocTab==='currency') {
+      const convMap = Object.fromEntries(Object.entries(s.byCur).map(([c,v])=>[c, toDisplay(v,c)]));
+      const maxConv = Math.max(...Object.values(convMap).map(v=>Math.abs(v)), 1);
+      return {
+        donutSegs: Object.entries(s.byCur).filter(([c])=>(convMap[c]||0)>0)
+          .map(([c])=>({key:c,label:c,value:convMap[c],color:CUR_COLORS[c]||'#888'})),
+        rows: Object.entries(s.byCur).map(([c,native])=>({
+          key:c, label:c, value:native, color:CUR_COLORS[c]||'#888',
+          barPct:Math.min(Math.abs(convMap[c]||0)/maxConv*100,100),
+          isCurrency:true, currency:c,
+        })),
+        posTotal: Object.values(convMap).filter(v=>v>0).reduce((a,b)=>a+b,0),
+      };
+    }
+
+    if (allocTab==='type') {
+      const maxAbs = Math.max(s.assets, s.liabilities, 1);
+      return {
+        donutSegs: [
+          ...(s.assets>0?[{key:'asset',label:'Assets',value:s.assets,color:'#7eb8a4'}]:[]),
+          ...(s.liabilities>0?[{key:'liability',label:'Liabilities',value:s.liabilities,color:'#e07070'}]:[]),
+        ],
+        rows: [
+          {key:'asset',label:'Assets',value:s.assets,color:'#7eb8a4',barPct:Math.min(s.assets/maxAbs*100,100)},
+          {key:'liability',label:'Liabilities',value:-s.liabilities,color:'#e07070',barPct:Math.min(s.liabilities/maxAbs*100,100)},
+        ].filter(r=>Math.abs(r.value||0)>0),
+        posTotal: s.assets,
+      };
+    }
+
+    // default: class
+    const posTotal = Object.values(s.byCls).filter(v=>v>0).reduce((a,b)=>a+b,0);
+    const maxAbs = Math.max(...Object.values(s.byCls).map(v=>Math.abs(v)), 1);
+    return {
+      donutSegs: CLASS_OPTIONS
+        .filter(o=>(s.byCls[o.value]||0)>0 && !excluded.has(`cls:${o.value}`))
+        .map(o=>({key:o.value,label:o.label,value:s.byCls[o.value],color:CLS_COLORS[o.value]||'#888'})),
+      rows: CLASS_OPTIONS
+        .filter(o=>s.byCls[o.value]!==undefined||excluded.has(`cls:${o.value}`))
+        .map(o=>({
+          key:o.value, label:o.label, value:s.byCls[o.value]??0,
+          color:CLS_COLORS[o.value]||'#888',
+          barPct:Math.min(Math.abs(s.byCls[o.value]||0)/maxAbs*100,100),
+          sharePct:(s.byCls[o.value]||0)>0&&posTotal>0?((s.byCls[o.value]/posTotal)*100).toFixed(1):null,
+          isExcl:excluded.has(`cls:${o.value}`), clsKey:`cls:${o.value}`,
+        })),
+      posTotal,
+    };
+  }, [allocTab, s, excluded, toDisplay]);
 
   return (
     <div className="page">
+
       {/* ── Hero ── */}
       <div className="hero">
         <div className="hero-label">Total Net Worth</div>
         <div className="hero-value">{fmt(s.total, displayCurrency)}</div>
         <div className="hero-sub">Assets {fmt(s.assets,displayCurrency,true)} · Liabilities {fmt(s.liabilities,displayCurrency,true)}</div>
-        {delta!==null && (
-          <div style={{marginTop:12,display:"flex",alignItems:"center",flexWrap:"wrap",gap:8}}>
-            <span className={`delta ${delta>=0?"pos":"neg"}`} style={{marginTop:0}}>
+
+        {/* Baseline selector + Save */}
+        <div className="hero-baseline-row">
+          <select className="hero-sel" value={baselineId||''} onChange={e=>onSetBaseline(e.target.value||null)}>
+            <option value="">No baseline</option>
+            {[...milestones].sort((a,b)=>Number(b.ts)-Number(a.ts)).map(m=>(
+              <option key={m.id} value={m.id}>{m.label||fmtDate(m.ts)}</option>
+            ))}
+          </select>
+          <button className="btn btn-ghost btn-xs" onClick={()=>setShowSaveDlg(true)}>📌 Save</button>
+        </div>
+
+        {/* Delta + elapsed */}
+        {delta!=null && (
+          <div style={{marginTop:10,display:"flex",alignItems:"center",justifyContent:"center",gap:8,flexWrap:"wrap"}}>
+            <span className={`delta ${delta>=0?"pos":"neg"}`} style={{margin:0}}>
               {delta>=0?"▲":"▼"} {(delta>=0?"+":"")+fmt(delta,displayCurrency)}
-              {baseTotal!==0 ? ` (${((delta/Math.abs(baseTotal))*100).toFixed(1)}%)` : ""} vs baseline
+              {baseTotal ? ` (${((delta/Math.abs(baseTotal))*100).toFixed(1)}%)` : ""}
             </span>
-            {growthRate && (<>
-              <button onClick={cycleRate} style={{background:"none",border:"none",padding:0,cursor:"pointer",
-                color:growthRate.ann>=0?"var(--pos)":"var(--neg)",
-                fontSize:".7rem",fontFamily:"var(--fm)",fontWeight:600}}>
-                {growthRate.ann>=0?"+":""}{(toRate(growthRate.ann)*100).toFixed(2)}% {rateLabel}
+            {elapsedStr && (
+              <button onClick={cycleElapsed} style={{background:"none",border:"1px solid var(--border2)",
+                borderRadius:999,padding:"2px 8px",cursor:"pointer",
+                color:"var(--muted2)",fontSize:".65rem",fontFamily:"var(--fm)"}}>
+                {elapsedStr}
               </button>
-              <span style={{color:"var(--muted)",fontSize:".7rem",fontFamily:"var(--fm)"}}>
-                · {growthRate.years>=1?`${growthRate.years.toFixed(1)}y`:`${Math.round(growthRate.years*12)}mo`}
-              </span>
-            </>)}
+            )}
           </div>
         )}
-        {baseline && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6}}>Baseline: {baseline.label||fmtDate(baseline.ts)}</div>}
-        {hiddenCount>0 && <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:6,letterSpacing:".04em"}}>{hiddenCount} account{hiddenCount>1?"s":""} hidden from totals</div>}
-        {/* ── Nearest upcoming target ── */}
+
+        {/* Growth rate */}
+        {growthAbsPerUnit!=null && (
+          <div style={{marginTop:6,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            <span style={{fontFamily:"var(--fm)",fontSize:".68rem",color:"var(--muted)"}}>Rate</span>
+            <button onClick={cycleRate} style={{background:"none",border:"none",padding:0,cursor:"pointer",
+              color:growthAbsPerUnit>=0?"var(--pos)":"var(--neg)",
+              fontSize:".78rem",fontFamily:"var(--fm)",fontWeight:600}}>
+              {growthAbsPerUnit>=0?"+":""}{fmt(growthAbsPerUnit,displayCurrency,true)}/{rateUnitShort}
+              {' '}({growthPctInUnit>=0?"+":""}{growthPctInUnit.toFixed(2)}%)
+            </button>
+          </div>
+        )}
+
+        {/* Growth target */}
+        {editingGrowth ? (
+          <div className="gtgt-edit-row">
+            <span style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)"}}>Target</span>
+            <input className="hero-input" autoFocus value={growthInput}
+              onChange={e=>setGrowthInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter')saveGrowthTarget();if(e.key==='Escape')setEditingGrowth(false);}}
+              placeholder="e.g. 20000"/>
+            <span style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)"}}>{displayCurrency}/{rateUnitShort}</span>
+            <button className="btn btn-primary btn-xs" onClick={saveGrowthTarget}>Save</button>
+            <button className="btn btn-ghost btn-xs" onClick={()=>setEditingGrowth(false)}>✕</button>
+          </div>
+        ) : growthTarget ? (
+          <div className="gtgt-row">
+            <span style={{color:"var(--muted)"}}>Target</span>
+            <span style={{color:"var(--text)",fontWeight:500}}>
+              {fmt(growthTargetInUnit,displayCurrency,true)}/{rateUnitShort}
+            </span>
+            {growthTargetDiff!=null && (
+              <span style={{color:growthTargetDiff>=0?"var(--pos)":"var(--neg)"}}>
+                {growthTargetDiff>=0?"✓ +":"✗ "}{fmt(Math.abs(growthTargetDiff),displayCurrency,true)} {growthTargetDiff>=0?"ahead":"short"}
+              </span>
+            )}
+            <button onClick={()=>{setGrowthInput(String(Math.round(growthTarget.amount)));setEditingGrowth(true);}}
+              style={{background:"none",border:"none",padding:0,cursor:"pointer",color:"var(--muted)",fontSize:".7rem"}}>✎</button>
+            <button onClick={()=>onSetGrowthTarget(null)}
+              style={{background:"none",border:"none",padding:0,cursor:"pointer",color:"var(--muted)",fontSize:".7rem",opacity:.5}}>✕</button>
+          </div>
+        ) : (
+          <div style={{marginTop:6}}>
+            <button onClick={()=>{setGrowthInput('');setEditingGrowth(true);}}
+              style={{background:"none",border:"1px solid var(--border2)",borderRadius:999,padding:"2px 10px",
+                cursor:"pointer",color:"var(--muted)",fontSize:".65rem",fontFamily:"var(--fm)"}}>
+              + Set growth target
+            </button>
+          </div>
+        )}
+
+        {/* Nearest upcoming target (from Targets page) */}
         {(()=>{
           const now = Date.now();
           const upcoming = (targets||[])
@@ -1058,14 +1201,13 @@ function OverviewPage({ accounts, milestones, targets, baselineId, displayCurren
           const achieved = s.total >= tVal;
           const monthsLeft = (Number(t.targetTs)-now)/(30*86400000);
           let onTrack = null;
-          if (growthRate && growthRate.ann && !achieved) {
+          if (growthRateAnn && !achieved) {
             const elYears = (Number(t.targetTs)-now)/(365.25*86400000);
-            const projected = s.total * (1+growthRate.ann)**elYears;
+            const projected = s.total * (1+growthRateAnn)**elYears;
             if (projected >= tVal) {
               onTrack = "on track";
             } else {
-              const shortfall = tVal - projected;
-              const behindMo = Math.ceil(Math.log(tVal/s.total)/Math.log(1+growthRate.ann/12) - monthsLeft);
+              const behindMo = Math.ceil(Math.log(tVal/s.total)/Math.log(1+growthRateAnn/12) - monthsLeft);
               onTrack = behindMo>0 ? `~${behindMo}mo behind` : "on track";
             }
           }
@@ -1090,200 +1232,65 @@ function OverviewPage({ accounts, milestones, targets, baselineId, displayCurren
             </div>
           );
         })()}
+
+        {hiddenCount>0 && (
+          <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:10,letterSpacing:".04em"}}>
+            {hiddenCount} account{hiddenCount>1?"s":""} hidden from totals
+          </div>
+        )}
       </div>
 
       {/* ── Net Worth Trend ── */}
-      <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span>Net Worth Trend</span>
-        <button className="btn btn-ghost btn-xs" onClick={()=>setShowSaveDlg(true)}>📌 Save Milestone</button>
-      </div>
+      <div className="st">Net Worth Trend</div>
       <div className="card">
         <TrendChart milestones={milestones} currentValue={s.total} displayCurrency={displayCurrency} toDisplay={toDisplay} targets={targets}/>
       </div>
 
-      {/* ── Period Performance ── */}
-      {periodRows.length>0 && (<>
-        <div className="st" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span>Period Performance</span>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
-            {editingTarget
-              ? <input autoFocus value={targetInput}
-                  onChange={e=>setTargetInput(e.target.value)}
-                  onKeyDown={e=>{
-                    if(e.key==='Enter'||e.key==='Tab'){const v=parseFloat(targetInput);setTargetRate(isNaN(v)||v<=0?null:v/100);setEditingTarget(false);}
-                    if(e.key==='Escape'){setEditingTarget(false);}
-                  }}
-                  onBlur={()=>{const v=parseFloat(targetInput);setTargetRate(isNaN(v)||v<=0?null:v/100);setEditingTarget(false);}}
-                  placeholder="% p.a. e.g. 5"
-                  style={{width:90,background:"var(--s3)",border:"1px solid var(--gold)",color:"var(--text)",
-                          borderRadius:"var(--r2)",padding:"2px 7px",fontFamily:"var(--fm)",fontSize:".65rem",outline:"none"}}/>
-              : targetRate!==null
-                ? <button className="btn btn-ghost btn-xs" onClick={()=>{setTargetInput((targetRate*100).toFixed(1));setEditingTarget(true);}}>
-                    Target: {(toRate(targetRate)*100).toFixed(2)}% {rateLabel}
-                    <span onClick={e=>{e.stopPropagation();setTargetRate(null);}} style={{marginLeft:5,opacity:.5,fontSize:".75em"}}>✕</span>
-                  </button>
-                : <button className="btn btn-ghost btn-xs" onClick={()=>{setTargetInput('');setEditingTarget(true);}}>Set target</button>
-            }
-            <button className="btn btn-ghost btn-xs" onClick={cycleRate}>£/{rateUnitShort}</button>
-          </div>
-        </div>
-        <div className="card" style={{overflowX:"auto"}}>
-          <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
-                       borderBottom:"1px solid var(--border)",paddingBottom:6,marginBottom:4}}>
-            {['Period','From',`Change`,`£/${rateUnitShort}`].map((h,i)=>(
-              <span key={h} style={{fontSize:".6rem",color:"var(--muted)",fontFamily:"var(--fm)",
-                                    letterSpacing:".08em",textTransform:"uppercase",
-                                    textAlign:i>0?"right":"left"}}>{h}</span>
-            ))}
-          </div>
-          {periodRows.map((row,i)=>{
-            const dispRate = row.annRate===null ? null : toRate(row.annRate);
-            const absRate = dispRate!==null ? s.total*dispRate : null;
-            const targetInUnit = targetRate!==null ? toRate(targetRate) : null;
-            const rateColor = dispRate===null ? "var(--muted)"
-              : targetInUnit!==null
-                ? dispRate>=targetInUnit ? "var(--pos)" : "var(--neg)"
-                : dispRate>=0 ? "var(--pos)" : "var(--neg)";
-            return (
-              <div key={i} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:"0 16px",
-                                   alignItems:"center",padding:"6px 0",
-                                   borderBottom:i<periodRows.length-1?"1px solid var(--border)":"none"}}>
-                <div>
-                  <div style={{fontSize:".75rem",color:"var(--text)"}}>{row.label}</div>
-                  <div style={{fontSize:".62rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>
-                    {new Date(row.fromTs).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
-                  </div>
-                </div>
-                <div style={{textAlign:"right",fontSize:".72rem",color:"var(--muted)",fontFamily:"var(--fm)"}}>
-                  {fmt(row.startVal,displayCurrency,true)}
-                </div>
-                <div style={{textAlign:"right"}}>
-                  <div style={{fontSize:".75rem",fontFamily:"var(--fm)",
-                               color:row.change>=0?"var(--pos)":"var(--neg)"}}>
-                    {row.change>=0?"+":""}{fmt(row.change,displayCurrency,true)}
-                  </div>
-                  {row.changePct!==null&&(
-                    <div style={{fontSize:".62rem",fontFamily:"var(--fm)",
-                                 color:row.change>=0?"var(--pos)":"var(--neg)"}}>
-                      {row.changePct>=0?"+":""}{row.changePct.toFixed(1)}%
-                    </div>
-                  )}
-                </div>
-                <div style={{textAlign:"right",fontFamily:"var(--fm)",fontSize:".75rem",color:rateColor}}>
-                  {absRate===null ? "—" : `${absRate>=0?"+":""}${fmt(absRate,displayCurrency,true)}/${rateUnitShort}`}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </>)}
-
-      {/* ── Allocation ── */}
-      <div className="st">Asset Allocation</div>
+      {/* ── Allocation (consolidated) ── */}
+      <div className="st">Allocation</div>
       <div className="card">
+        <div className="alloc-tabs">
+          {[['class','Class'],['liquidity','Liquidity'],['risk','Risk'],['currency','Currency'],['type','Type']].map(([v,l])=>(
+            <button key={v} className={`alloc-tab${allocTab===v?' on':''}`} onClick={()=>setAllocTab(v)}>{l}</button>
+          ))}
+        </div>
         <div className="alloc-grid">
-          <DonutChart byCls={s.byCls} displayCurrency={displayCurrency}/>
+          <DonutChart segments={allocData.donutSegs} displayCurrency={displayCurrency}/>
           <div className="alloc-bars">
-            {(()=>{
-              const posTotal=Object.values(s.byCls).filter(v=>v>0).reduce((a,b)=>a+b,0);
-              return CLASS_OPTIONS.map(opt=>{
-                const clsKey=`cls:${opt.value}`;
-                const isExcl=excluded.has(clsKey);
-                const val=s.byCls[opt.value];
-                if(val===undefined&&!isExcl) return null;
-                const barPct=val!==undefined?Math.min(Math.abs(val)/maxAbs*100,100):0;
-                const sharePct=val>0&&posTotal>0?((val/posTotal)*100).toFixed(1):null;
-                return (
-                  <div className={`bar-row${isExcl?" excl-row":""}`} key={opt.value}>
-                    <div className="bar-row-top">
-                      <span style={{color:isExcl?"var(--muted)":"var(--text)",display:"flex",alignItems:"center",gap:6}}>
-                        <span className="cls-dot" style={{background:CLS_COLORS[opt.value]||"var(--border2)"}}/>
-                        {opt.label}
-                      </span>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        {isExcl
-                          ? <span className="excl-tag">hidden</span>
-                          : <><span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
-                            {sharePct&&<span className="bar-pct">{sharePct}%</span>}</>
-                        }
-                        <button className="excl-btn" onClick={()=>onToggleExcluded(clsKey)} title={isExcl?"Show":"Hide"}>
-                          {isExcl?"Show":"Hide"}
-                        </button>
-                      </div>
-                    </div>
-                    {!isExcl&&val!==undefined&&(
-                      <div className="bar-track">
-                        <div className="bar-fill" style={{width:barPct+"%",background:val<0?"var(--neg)":CLS_COLORS[opt.value]||"var(--gold)"}}/>
-                      </div>
+            {allocData.rows.map(row=>(
+              <div className={`bar-row${row.isExcl?" excl-row":""}`} key={row.key}>
+                <div className="bar-row-top">
+                  <span style={{color:row.isExcl?"var(--muted)":"var(--text)",display:"flex",alignItems:"center",gap:6,flex:1,minWidth:0}}>
+                    <span className="cls-dot" style={{background:row.color,flexShrink:0}}/>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.label}</span>
+                    {row.desc&&<span style={{color:"var(--muted)",fontSize:".62rem",fontFamily:"var(--fm)",flexShrink:0}}>{row.desc}</span>}
+                  </span>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                    {row.isExcl
+                      ? <span className="excl-tag">hidden</span>
+                      : <>
+                          <span className={`crow-val ${(row.value||0)<0?"neg":(row.value||0)===0?"neu":"pos"}`}>
+                            {row.isCurrency ? fmt(row.value,row.currency) : fmt(row.value,displayCurrency)}
+                          </span>
+                          {row.sharePct&&<span className="bar-pct">{row.sharePct}%</span>}
+                        </>
+                    }
+                    {row.clsKey&&(
+                      <button className="excl-btn" onClick={()=>onToggleExcluded(row.clsKey)}>
+                        {row.isExcl?"Show":"Hide"}
+                      </button>
                     )}
                   </div>
-                );
-              });
-            })()}
+                </div>
+                {!row.isExcl&&(
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{width:(row.barPct||0)+"%",background:(row.value||0)<0?"var(--neg)":row.color}}/>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
-      </div>
-
-      {/* ── By Liquidity ── */}
-      <div className="st">By Liquidity</div>
-      <div className="card">
-        {LIQUIDITY_OPTIONS.map(opt=>{
-          const val=s.byLiq[opt.value];
-          if(val===undefined) return null;
-          const pct=Math.min(Math.abs(val)/liqMax*100,100);
-          return (
-            <div className="bar-row" key={opt.value}>
-              <div className="bar-row-top">
-                <span style={{color:"var(--text)",display:"flex",alignItems:"center",gap:6}}>
-                  <span className="cls-dot" style={{background:LIQ_COLORS[opt.value]||"var(--border2)"}}/>
-                  {opt.label}
-                  <span style={{color:"var(--muted)",fontSize:".65rem",fontFamily:"var(--fm)"}}>{opt.desc}</span>
-                </span>
-                <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
-              </div>
-              <div className="bar-track">
-                <div className="bar-fill" style={{width:pct+"%",background:LIQ_COLORS[opt.value]||"var(--gold)"}}/>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── By Risk ── */}
-      <div className="st">By Risk Level</div>
-      <div className="card">
-        {RISK_OPTIONS.map(opt=>{
-          const val=s.byRisk[opt.value];
-          if(val===undefined) return null;
-          const pct=Math.min(Math.abs(val)/riskMax*100,100);
-          return (
-            <div className="bar-row" key={opt.value}>
-              <div className="bar-row-top">
-                <span style={{color:"var(--text)",display:"flex",alignItems:"center",gap:6}}>
-                  <span className="cls-dot" style={{background:RISK_COLORS[opt.value]||"var(--border2)"}}/>
-                  {opt.label}
-                  <span style={{color:"var(--muted)",fontSize:".65rem",fontFamily:"var(--fm)"}}>{opt.desc}</span>
-                </span>
-                <span className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,displayCurrency)}</span>
-              </div>
-              <div className="bar-track">
-                <div className="bar-fill" style={{width:pct+"%",background:RISK_COLORS[opt.value]||"var(--gold)"}}/>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── By Currency ── */}
-      <div className="st">By Currency (native amounts)</div>
-      <div className="card">
-        {Object.entries(s.byCur).length===0 && <div className="empty">No accounts yet</div>}
-        {Object.entries(s.byCur).map(([cur,val])=>(
-          <div className="crow" key={cur}>
-            <div className="crow-label">{cur}</div>
-            <div className={`crow-val ${val<0?"neg":val===0?"neu":"pos"}`}>{fmt(val,cur)}</div>
-          </div>
-        ))}
       </div>
 
       {showSaveDlg && (
@@ -2152,6 +2159,7 @@ export default function App() {
   const [page, setPage] = useState("overview");
   const [accounts, setAccounts] = useState([]);
   const [accountOrder, setAccountOrder] = useState([]);
+  const [growthTarget, setGrowthTarget] = useState(null);
   const [milestones, setMilestones] = useState([]);
   const [targets, setTargets] = useState([]);
   const [baselineId, setBaselineId] = useState(null);
@@ -2231,6 +2239,7 @@ export default function App() {
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
       if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
+      try { if (data.settings?.growthTarget) setGrowthTarget(JSON.parse(data.settings.growthTarget)); } catch {}
       setLastSync(Date.now());
     } catch(e) { setSyncErr(e.message); }
     setSyncing(false);
@@ -2251,6 +2260,7 @@ export default function App() {
       if (data.settings?.displayCurrency) setDisplayCurrency(data.settings.displayCurrency);
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
       if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
+      try { if (data.settings?.growthTarget) setGrowthTarget(JSON.parse(data.settings.growthTarget)); } catch {}
       localStorage.setItem("nw_api_url", url);
       setApiUrl(url);
       setConnected(true);
@@ -2399,6 +2409,11 @@ export default function App() {
     try { await api.current.call("setBaseline", {id: id||""}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+  const saveGrowthTargetSetting = async (target) => {
+    setGrowthTarget(target);
+    try { await api.current.call("setSetting", {key:"growthTarget", value:target?JSON.stringify(target):""}); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
   const updateMilestoneLabel = async (id, label) => {
     const m=milestones.find(m=>m.id===id);
     setMilestones(p=>p.map(x=>x.id===id?{...x,label}:x));
@@ -2478,7 +2493,7 @@ export default function App() {
             return (currentNW/baseConverted)**(1/el)-1;
           })();
           return <>
-            {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} rates={rates} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone}/>}
+            {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone} onSetBaseline={setBaseline} growthTarget={growthTarget} onSetGrowthTarget={saveGrowthTargetSetting}/>}
             {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
             {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
             {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
