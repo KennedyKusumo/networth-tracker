@@ -147,6 +147,7 @@ const localDatetimeStr = ts => {
 // ─────────────────────────────────────────────────────────────
 //  CHART HELPERS
 // ─────────────────────────────────────────────────────────────
+const TGT_COLORS = ["#6fb5a2","#b07eb8","#8ba3c7","#d4845a","#c8a96e","#e07070"];
 const CLS_COLORS = {
   "cash-savings":"#7eb8a4","investments":"#c8a96e",
   "retirement":"#8ba3c7","property":"#b07eb8","debt":"#e07070",
@@ -2018,13 +2019,13 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   const defaultRate = 3.5;
   const [rateInput, setRateInput] = useState(String(defaultRate));
   const cfNet = netMonthlyCashflow!=null ? Math.max(0, netMonthlyCashflow) : null;
-  const [cfPct, setCfPct] = useState(50); // % of net cashflow to use as contribution
+  const [cfPct, setCfPct] = useState(50);
   const cfDefault = cfNet!=null ? Math.round(cfNet * 0.5) : 0;
   const [monthly, setMonthly] = useState(cfDefault);
   const [monthlyOverridden, setMonthlyOverridden] = useState(false);
   const [horizon, setHorizon] = useState(120);
   const [showScenarios, setShowScenarios] = useState(false);
-  const [bandPct, setBandPct] = useState(2); // uncertainty band in % points
+  const [bandPct, setBandPct] = useState(2);
   const svgRef = useRef(null);
   const [tipMonth, setTipMonth] = useState(null);
 
@@ -2032,30 +2033,65 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   const band = bandPct / 100;
   const months = horizon;
 
+  // ── upcoming targets (future deadlines only) ──────────────
+  const upcomingTargets = useMemo(() => {
+    const now = Date.now();
+    return (targets||[])
+      .filter(t => Number(t.targetTs) > now)
+      .sort((a,b) => Number(a.targetTs)-Number(b.targetTs))
+      .map((t,i) => ({ ...t, color: TGT_COLORS[i % TGT_COLORS.length] }));
+  }, [targets]);
+
+  // targets that fall within the horizon window
+  const visibleTargets = useMemo(() => {
+    const cutoff = Date.now() + months * 30 * 86400000;
+    return upcomingTargets.filter(t => Number(t.targetTs) <= cutoff);
+  }, [upcomingTargets, months]);
+
+  // selected target IDs — initialise with all visible ids whenever visible set changes
+  const [selectedIds, setSelectedIds] = useState(() => new Set(visibleTargets.map(t=>t.id)));
+  // sync when visible targets change (e.g. horizon shrinks/grows)
+  const prevVisibleRef = useRef(null);
+  useEffect(() => {
+    const prevIds = prevVisibleRef.current;
+    const currIds = visibleTargets.map(t=>t.id).join(",");
+    if (prevIds !== currIds) {
+      setSelectedIds(new Set(visibleTargets.map(t=>t.id)));
+      prevVisibleRef.current = currIds;
+    }
+  }, [visibleTargets]);
+
+  const toggleTarget = id => setSelectedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  const activeTargets = visibleTargets.filter(t => selectedIds.has(t.id));
+
+  // per-target stats
+  const tgtStats = useMemo(() => activeTargets.map(t => {
+    const tgtVal = Number(t.amount);
+    const moToReach = monthsToReach(currentNW, annRate, monthly, tgtVal);
+    const moRemaining = Math.ceil((Number(t.targetTs)-Date.now())/2628000000);
+    const reqRate = moRemaining > 0 ? solveRequiredRate(currentNW, monthly, tgtVal, moRemaining) : null;
+    return { t, tgtVal, moToReach, moRemaining, reqRate, color: t.color };
+  }), [activeTargets, currentNW, annRate, monthly]);
+
+  // remaining cashflow (spending buffer)
+  const remainingCf = cfNet != null ? cfNet - monthly : null;
+
+  // projections
   const base = useMemo(() => projectNW(currentNW, annRate, monthly, months), [currentNW, annRate, monthly, months]);
   const pess = useMemo(() => showScenarios ? projectNW(currentNW, Math.max(annRate-band,-0.99), monthly, months) : null, [currentNW, annRate, band, monthly, months, showScenarios]);
   const opti = useMemo(() => showScenarios ? projectNW(currentNW, annRate+band, monthly, months) : null, [currentNW, annRate, band, monthly, months, showScenarios]);
 
-  const nearestTarget = useMemo(() => {
-    const now = Date.now();
-    return (targets||[]).filter(t=>Number(t.targetTs)>now).sort((a,b)=>Number(a.targetTs)-Number(b.targetTs))[0] || null;
-  }, [targets]);
-
-  const tgtVal = nearestTarget ? nearestTarget.amount : null;
-
-  const moToTarget = useMemo(() => tgtVal!=null ? monthsToReach(currentNW, annRate, monthly, tgtVal) : null, [currentNW, annRate, monthly, tgtVal]);
-
-  const reqRate = useMemo(() => {
-    if (!nearestTarget || tgtVal==null) return null;
-    const mo = Math.ceil((Number(nearestTarget.targetTs)-Date.now())/2628000000);
-    return mo>0 ? solveRequiredRate(currentNW, monthly, tgtVal, mo) : null;
-  }, [currentNW, monthly, nearestTarget, tgtVal]);
-
-  // SVG projection chart
-  const allVals = [...base, ...(pess||[]), ...(opti||[])];
+  // SVG chart
+  const tgtValues = activeTargets.map(t=>Number(t.amount));
+  const allVals = [...base, ...(pess||[]), ...(opti||[]), ...tgtValues];
   const W=560, H=160, PAD={l:62,r:14,t:12,b:30};
   const iW=W-PAD.l-PAD.r, iH=H-PAD.t-PAD.b;
-  const minV=Math.min(...allVals,tgtVal??Infinity), maxV=Math.max(...allVals);
+  const minV=Math.min(...allVals), maxV=Math.max(...allVals);
   const vSpan=(maxV-minV)||1;
   const sx=m=>PAD.l+(m/months)*iW;
   const sy=v=>PAD.t+iH-((v-minV)/vSpan)*iH;
@@ -2072,16 +2108,21 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   };
 
   const tip = tipMonth!=null ? {m:tipMonth, base:base[tipMonth]??(base.at(-1)), pess:pess?.[tipMonth], opti:opti?.[tipMonth]} : null;
-  const tgtY = tgtVal!=null && tgtVal>=minV && tgtVal<=maxV ? sy(tgtVal) : null;
 
   const xLabels = [0, Math.round(months/2), months].map(m => ({
     m, x: sx(m),
     label: m===0 ? "Now" : new Date(Date.now()+m*30*86400000).toLocaleDateString("en-GB",{month:"short",year:"2-digit"}),
   }));
 
+  // helper: deadline x position for a target (clamped to chart)
+  const tgtDeadlineX = t => {
+    const mo = (Number(t.targetTs)-Date.now())/2628000000;
+    return Math.min(Math.max(mo, 0), months);
+  };
+
   return (
     <div className="page">
-      {/* controls */}
+      {/* ── controls ── */}
       <div className="model-card">
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,flexWrap:"wrap"}}>
           <div>
@@ -2126,6 +2167,8 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
             )}
           </div>
         </div>
+
+        {/* horizon */}
         <div style={{marginTop:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <div style={{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
             <span style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Horizon:</span>
@@ -2138,6 +2181,8 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
             ))}
           </div>
         </div>
+
+        {/* scenarios */}
         <div style={{marginTop:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <button className="btn btn-ghost btn-xs" onClick={()=>setShowScenarios(s=>!s)}
             style={showScenarios?{borderColor:"var(--gold)",color:"var(--gold)"}:{}}>
@@ -2152,14 +2197,44 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
             </>
           )}
         </div>
+
+        {/* target selector pills */}
+        {visibleTargets.length>0&&(
+          <div style={{marginTop:14,borderTop:"1px solid var(--border)",paddingTop:12}}>
+            <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginBottom:8,letterSpacing:".06em",textTransform:"uppercase"}}>Targets in window</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {visibleTargets.map(t=>{
+                const sel = selectedIds.has(t.id);
+                return (
+                  <button key={t.id} onClick={()=>toggleTarget(t.id)}
+                    style={{
+                      display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:99,
+                      border:`1px solid ${sel?t.color:"var(--border)"}`,
+                      background: sel ? t.color+"22" : "transparent",
+                      cursor:"pointer",transition:"all .15s",
+                    }}>
+                    <span style={{width:8,height:8,borderRadius:"50%",background:t.color,display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontSize:".68rem",fontFamily:"var(--fm)",color:sel?t.color:"var(--muted)",whiteSpace:"nowrap"}}>
+                      {t.label}
+                    </span>
+                    <span style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginLeft:2}}>
+                      {fmt(Number(t.amount),displayCurrency,true)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* projection chart */}
+      {/* ── projection chart ── */}
       <div className="model-card">
         <div style={{position:"relative"}}>
           <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`}
             style={{width:"100%",display:"block",overflow:"visible",cursor:"crosshair"}}
             onMouseMove={handleMM} onMouseLeave={()=>setTipMonth(null)}>
+            {/* grid lines */}
             {yTicks.map((t,i)=>(
               <g key={i}>
                 <line x1={PAD.l} y1={t.y} x2={W-PAD.r} y2={t.y} stroke="var(--border)" strokeWidth=".6" strokeDasharray="3 3"/>
@@ -2168,23 +2243,41 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
                 </text>
               </g>
             ))}
-            {tgtY!=null&&(
-              <g>
-                <line x1={PAD.l} y1={tgtY} x2={W-PAD.r} y2={tgtY} stroke="var(--pos)" strokeWidth="1" strokeDasharray="4 3" opacity=".6"/>
-                <text x={W-PAD.r+2} y={tgtY+4} style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--pos)"}}>
-                  {nearestTarget?.label||"Target"}
-                </text>
-              </g>
-            )}
+            {/* target horizontal lines + deadline verticals */}
+            {activeTargets.map(t=>{
+              const tv = Number(t.amount);
+              const tY = tv>=minV && tv<=maxV ? sy(tv) : null;
+              const dlX = sx(tgtDeadlineX(t));
+              return (
+                <g key={t.id}>
+                  {tY!=null&&(
+                    <line x1={PAD.l} y1={tY} x2={W-PAD.r} y2={tY}
+                      stroke={t.color} strokeWidth="1" strokeDasharray="4 3" opacity=".7"/>
+                  )}
+                  {/* deadline vertical tick */}
+                  <line x1={dlX} y1={PAD.t} x2={dlX} y2={PAD.t+iH}
+                    stroke={t.color} strokeWidth=".8" strokeDasharray="2 4" opacity=".4"/>
+                  {tY!=null&&(
+                    <text x={W-PAD.r+2} y={tY+4} style={{fontFamily:"var(--fm)",fontSize:"7px",fill:t.color}}>
+                      {t.label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            {/* scenario bands */}
             {showScenarios&&pess&&(
               <path d={path(pess)} fill="none" stroke="#e07070" strokeWidth="1.2" strokeDasharray="4 2" opacity=".5"/>
             )}
             {showScenarios&&opti&&(
               <path d={path(opti)} fill="none" stroke="#6fb5a2" strokeWidth="1.2" strokeDasharray="4 2" opacity=".5"/>
             )}
+            {/* base projection */}
             <path d={path(base)} fill="none" stroke="var(--gold)" strokeWidth="2" strokeLinejoin="round"/>
+            {/* crosshair */}
             {tip&&<line x1={sx(tip.m)} y1={PAD.t} x2={sx(tip.m)} y2={PAD.t+iH} stroke="var(--border2)" strokeWidth="1" strokeDasharray="3 3"/>}
             {tip&&<circle cx={sx(tip.m)} cy={sy(tip.base)} r={4} fill="var(--gold)" stroke="var(--s1)" strokeWidth="1.5"/>}
+            {/* x-axis labels */}
             {xLabels.map(({m,x,label})=>(
               <text key={m} x={x} y={H-5} textAnchor={m===0?"start":m===months?"end":"middle"}
                 style={{fontFamily:"var(--fm)",fontSize:"7.5px",fill:"var(--muted)"}}>
@@ -2217,42 +2310,17 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
         )}
       </div>
 
-      {/* summary stats */}
+      {/* ── summary stats ── */}
       <div className="model-card">
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12}}>
+        {/* top row: projected value / total contributed / spending buffer */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom: tgtStats.length>0?16:0}}>
           <div>
-            <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>In {horizon/12} years</div>
+            <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>In {months<12?`${months}mo`:`${months/12}y`}</div>
             <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--gold)",marginTop:2}}>{fmt(base.at(-1),displayCurrency)}</div>
             <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
               {base.at(-1)>currentNW?`+${fmt(base.at(-1)-currentNW,displayCurrency,true)} gain`:"No growth"}
             </div>
           </div>
-          {tgtVal!=null&&(
-            <div>
-              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
-                Time to {nearestTarget?.label||"Target"}
-              </div>
-              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--teal)",marginTop:2}}>
-                {moToTarget===0?"Already reached":moToTarget===null?"Not reachable":`${moToTarget}mo`}
-              </div>
-              {moToTarget!=null&&moToTarget>0&&(
-                <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
-                  {new Date(Date.now()+moToTarget*30*86400000).toLocaleDateString("en-GB",{month:"short",year:"numeric"})}
-                </div>
-              )}
-            </div>
-          )}
-          {reqRate!=null&&(
-            <div>
-              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>Required rate</div>
-              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:reqRate<=annRate?"var(--pos)":"var(--neg)",marginTop:2}}>
-                {(reqRate*100).toFixed(1)}% p.a.
-              </div>
-              <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
-                to hit {nearestTarget?.label||"target"} on time
-              </div>
-            </div>
-          )}
           {monthly>0&&(
             <div>
               <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>Total contributed</div>
@@ -2262,7 +2330,65 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
               </div>
             </div>
           )}
+          {remainingCf!=null&&(
+            <div>
+              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>Spending buffer</div>
+              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:remainingCf>=0?"var(--pos)":"var(--neg)",marginTop:2}}>
+                {fmt(remainingCf,displayCurrency,true)}/mo
+              </div>
+              <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                after {cfPct}% invested
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* per-target table */}
+        {tgtStats.length>0&&(
+          <div style={{borderTop:"1px solid var(--border)",paddingTop:12}}>
+            <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Target projections</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {tgtStats.map(({t,tgtVal,moToReach,moRemaining,reqRate,color})=>{
+                const deadline = new Date(Number(t.targetTs)).toLocaleDateString("en-GB",{month:"short",year:"numeric"});
+                const onTrack = moToReach!=null && moToReach<=moRemaining;
+                return (
+                  <div key={t.id} style={{
+                    display:"grid",gridTemplateColumns:"8px 1fr auto auto auto",alignItems:"center",
+                    gap:10,padding:"8px 10px",borderRadius:8,
+                    background:"var(--s2)",border:`1px solid ${color}33`,
+                  }}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>
+                    <div>
+                      <div style={{fontSize:".75rem",fontFamily:"var(--fd)",color:"var(--text)"}}>{t.label}</div>
+                      <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                        {fmt(tgtVal,displayCurrency,true)} · due {deadline}
+                      </div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Time to reach</div>
+                      <div style={{fontSize:".78rem",fontFamily:"var(--fd)",color:onTrack?"var(--pos)":"var(--neg)",marginTop:1}}>
+                        {moToReach===0?"Now":moToReach===null?"Never":`${moToReach}mo`}
+                      </div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Req. rate</div>
+                      <div style={{fontSize:".78rem",fontFamily:"var(--fd)",color:reqRate==null?"var(--muted)":reqRate<=annRate?"var(--pos)":"var(--neg)",marginTop:1}}>
+                        {reqRate==null?"—":`${(reqRate*100).toFixed(1)}%`}
+                      </div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Status</div>
+                      <div style={{fontSize:".72rem",fontFamily:"var(--fm)",marginTop:1,
+                        color: moToReach===0?"var(--pos)":onTrack?"var(--pos)":"var(--neg)"}}>
+                        {moToReach===0?"✓ Done":onTrack?"✓ On track":"✗ Behind"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
