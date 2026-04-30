@@ -2015,7 +2015,7 @@ const solveRequiredRate = (start, monthlyContrib, target, months) => {
 //  MODEL PAGE  (Phase 3 · What-If)
 // ─────────────────────────────────────────────────────────────
 function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMonthlyCashflow }) {
-  const defaultRate = historicalRate != null ? Math.round(historicalRate * 1000) / 10 : 7;
+  const defaultRate = 3.5;
   const [rateInput, setRateInput] = useState(String(defaultRate));
   const cfNet = netMonthlyCashflow!=null ? Math.max(0, netMonthlyCashflow) : null;
   const [cfPct, setCfPct] = useState(50); // % of net cashflow to use as contribution
