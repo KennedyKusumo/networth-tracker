@@ -2367,10 +2367,23 @@ function CashflowModal({ initial, displayCurrency, existingCats, onSave, onClose
 // ─────────────────────────────────────────────────────────────
 //  CASHFLOW PAGE
 // ─────────────────────────────────────────────────────────────
+const CF_VIEW_UNITS = [
+  { value:"daily",       label:"Day",        suffix:"/day",  mult:12/365.25 },
+  { value:"weekly",      label:"Week",       suffix:"/wk",   mult:12/52     },
+  { value:"fortnightly", label:"Fortnight",  suffix:"/fn",   mult:12/26     },
+  { value:"monthly",     label:"Month",      suffix:"/mo",   mult:1         },
+  { value:"annual",      label:"Year",       suffix:"/yr",   mult:12        },
+];
+
 function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, onDelete }) {
-  const [modal, setModal] = useState(null); // null | "add-income" | "add-expense" | {cf} for edit
+  const [modal, setModal] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [viewUnit, setViewUnit] = useState("monthly");
   const now = Date.now();
+
+  const unitCfg = CF_VIEW_UNITS.find(u=>u.value===viewUnit) || CF_VIEW_UNITS[3];
+  // scale a monthly amount to the selected view unit
+  const toUnit = mo => mo * unitCfg.mult;
 
   // Derive custom categories from existing cashflows
   const existingCats = useMemo(() => {
@@ -2391,10 +2404,14 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
   const oneTimes = cashflows.filter(c=>c.frequency==="one-time")
     .sort((a,b)=>Number(b.date||0)-Number(a.date||0));
 
-  const totalIn  = income.reduce((s,c)=>s+cfMonthly(c,toDisplay),0);
-  const totalOut = expenses.reduce((s,c)=>s+cfMonthly(c,toDisplay),0);
-  const net      = totalIn - totalOut;
-  const saveRate = totalIn>0 ? net/totalIn*100 : null;
+  // All totals in monthly terms, scaled by unitCfg.mult for display
+  const totalInMo  = income.reduce((s,c)=>s+cfMonthly(c,toDisplay),0);
+  const totalOutMo = expenses.reduce((s,c)=>s+cfMonthly(c,toDisplay),0);
+  const netMo      = totalInMo - totalOutMo;
+  const totalIn    = toUnit(totalInMo);
+  const totalOut   = toUnit(totalOutMo);
+  const net        = toUnit(netMo);
+  const saveRate   = totalInMo>0 ? netMo/totalInMo*100 : null;
 
   // Group expenses by category
   const expGroups = useMemo(()=>{
@@ -2404,7 +2421,6 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
       if (!map[cat]) map[cat]=[];
       map[cat].push(c);
     });
-    // Sort groups by total desc
     return Object.entries(map)
       .map(([cat,items])=>({cat,items,total:items.reduce((s,c)=>s+cfMonthly(c,toDisplay),0)}))
       .sort((a,b)=>b.total-a.total);
@@ -2414,28 +2430,29 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
   const fmtShort = ts => ts ? new Date(Number(ts)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : null;
 
   const openModal = (initialType) => setModal({_new: true, type: initialType});
-
-  const handleSave = cf => {
-    if (modal?._new) onAdd(cf);
-    else onUpdate(cf);
-    setModal(null);
-  };
+  const handleSave = cf => { if (modal?._new) onAdd(cf); else onUpdate(cf); setModal(null); };
 
   const CfRow = ({cf}) => {
-    const monthly = cfMonthly(cf, toDisplay);
+    const mo = cfMonthly(cf, toDisplay);
+    const scaled = toUnit(mo);
     const isIncome = cf.type==="income";
     const expired = cf.endDate && Number(cf.endDate) < now;
     const future  = cf.startDate && Number(cf.startDate) > now;
     return (
       <div className="cf-row" style={{opacity:expired?0.45:1}}>
         <div className="cf-row-left">
-          <div className="cf-row-name">{cf.name}{expired&&<span style={{marginLeft:6,fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)"}}>(ended)</span>}{future&&<span style={{marginLeft:6,fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)"}}>(starts {fmtShort(cf.startDate)})</span>}</div>
+          <div className="cf-row-name">
+            {cf.name}
+            {expired&&<span style={{marginLeft:6,fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)"}}>(ended)</span>}
+            {future&&<span style={{marginLeft:6,fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)"}}>(starts {fmtShort(cf.startDate)})</span>}
+          </div>
           <div className="cf-row-meta">{cf.category}{cf.currency!==displayCurrency?` · ${cf.currency}`:""}</div>
         </div>
         <span className="cf-row-freq">{freqLabel(cf.frequency)}</span>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <span className="cf-row-amount" style={{color:isIncome?"var(--pos)":"var(--neg)"}}>
-            {isIncome?"+":"-"}{fmt(cfMonthly(cf,toDisplay),displayCurrency,true)}<span style={{fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)",fontWeight:400}}>/mo</span>
+            {isIncome?"+":"-"}{fmt(scaled,displayCurrency,true)}
+            <span style={{fontFamily:"var(--fm)",fontSize:".6rem",color:"var(--muted)",fontWeight:400}}>{unitCfg.suffix}</span>
           </span>
           <div className="cf-row-actions">
             <button className="btn btn-ghost btn-xs" style={{padding:"1px 6px"}} onClick={()=>setModal(cf)}>✎</button>
@@ -2452,15 +2469,29 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
 
   return (
     <div className="page">
+      {/* Period toggle */}
+      <div style={{display:"flex",gap:4,marginBottom:12,justifyContent:"flex-end"}}>
+        {CF_VIEW_UNITS.map(u=>(
+          <button key={u.value}
+            className={`btn btn-xs${viewUnit===u.value?" btn-ghost":""}`}
+            style={viewUnit===u.value
+              ? {borderColor:"var(--gold)",color:"var(--gold)",background:"var(--s3)"}
+              : {borderColor:"var(--border2)",color:"var(--muted)",background:"none"}}
+            onClick={()=>setViewUnit(u.value)}>
+            {u.label}
+          </button>
+        ))}
+      </div>
+
       {/* Summary */}
       <div className="cf-summary">
         <div className="cf-summary-cell">
-          <div className="cf-summary-label">Monthly In</div>
+          <div className="cf-summary-label">In{unitCfg.suffix}</div>
           <div className="cf-summary-val" style={{color:"var(--pos)"}}>{fmt(totalIn,displayCurrency,true)}</div>
           <div className="cf-summary-sub">{income.length} stream{income.length!==1?"s":""}</div>
         </div>
         <div className="cf-summary-cell">
-          <div className="cf-summary-label">Monthly Out</div>
+          <div className="cf-summary-label">Out{unitCfg.suffix}</div>
           <div className="cf-summary-val" style={{color:"var(--neg)"}}>{fmt(totalOut,displayCurrency,true)}</div>
           <div className="cf-summary-sub">{expenses.length} expense{expenses.length!==1?"s":""}</div>
         </div>
@@ -2483,7 +2514,7 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
         <div style={{marginBottom:20}}>
           <div className="cf-section-head">
             <span className="cf-section-title">Income</span>
-            <span className="cf-section-total" style={{color:"var(--pos)"}}>+{fmt(totalIn,displayCurrency,true)}/mo</span>
+            <span className="cf-section-total" style={{color:"var(--pos)"}}>+{fmt(totalIn,displayCurrency,true)}{unitCfg.suffix}</span>
           </div>
           {[...income].sort((a,b)=>cfMonthly(b,toDisplay)-cfMonthly(a,toDisplay)).map(cf=><CfRow key={cf.id} cf={cf}/>)}
           {/* Inactive income */}
@@ -2497,12 +2528,12 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
         <div style={{marginBottom:20}}>
           <div className="cf-section-head">
             <span className="cf-section-title">Expenses</span>
-            <span className="cf-section-total" style={{color:"var(--neg)"}}>-{fmt(totalOut,displayCurrency,true)}/mo</span>
+            <span className="cf-section-total" style={{color:"var(--neg)"}}>-{fmt(totalOut,displayCurrency,true)}{unitCfg.suffix}</span>
           </div>
           {expGroups.map(({cat,items,total})=>(
             <div key={cat} className="cf-group">
               <div className="cf-group-label" style={{display:"flex",justifyContent:"space-between"}}>
-                <span>{cat}</span><span>{fmt(total,displayCurrency,true)}/mo</span>
+                <span>{cat}</span><span>{fmt(toUnit(total),displayCurrency,true)}{unitCfg.suffix}</span>
               </div>
               {[...items].sort((a,b)=>cfMonthly(b,toDisplay)-cfMonthly(a,toDisplay)).map(cf=><CfRow key={cf.id} cf={cf}/>)}
             </div>
@@ -2915,8 +2946,8 @@ export default function App() {
           {[
             ["overview","Overview"],
             ["accounts",`Accounts (${accounts.length})`],
-            ["cash","Cash"],
             ["milestones",`Milestones (${milestones.length})`],
+            ["cash","Cash"],
             ["targets",`Targets (${targets.length})`],
             ["model","Model"],
           ].map(([id,label])=>(
