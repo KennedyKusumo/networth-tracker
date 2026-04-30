@@ -2017,20 +2017,24 @@ const solveRequiredRate = (start, monthlyContrib, target, months) => {
 function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMonthlyCashflow }) {
   const defaultRate = historicalRate != null ? Math.round(historicalRate * 1000) / 10 : 7;
   const [rateInput, setRateInput] = useState(String(defaultRate));
-  const cfDefault = netMonthlyCashflow!=null ? Math.max(0, Math.round(netMonthlyCashflow)) : 0;
+  const cfNet = netMonthlyCashflow!=null ? Math.max(0, netMonthlyCashflow) : null;
+  const [cfPct, setCfPct] = useState(50); // % of net cashflow to use as contribution
+  const cfDefault = cfNet!=null ? Math.round(cfNet * 0.5) : 0;
   const [monthly, setMonthly] = useState(cfDefault);
   const [monthlyOverridden, setMonthlyOverridden] = useState(false);
   const [horizon, setHorizon] = useState(120);
   const [showScenarios, setShowScenarios] = useState(false);
+  const [bandPct, setBandPct] = useState(2); // uncertainty band in % points
   const svgRef = useRef(null);
   const [tipMonth, setTipMonth] = useState(null);
 
   const annRate = parseFloat(rateInput) / 100 || 0;
+  const band = bandPct / 100;
   const months = horizon;
 
   const base = useMemo(() => projectNW(currentNW, annRate, monthly, months), [currentNW, annRate, monthly, months]);
-  const pess = useMemo(() => showScenarios ? projectNW(currentNW, Math.max(annRate-0.02,-0.99), monthly, months) : null, [currentNW, annRate, monthly, months, showScenarios]);
-  const opti = useMemo(() => showScenarios ? projectNW(currentNW, annRate+0.02, monthly, months) : null, [currentNW, annRate, monthly, months, showScenarios]);
+  const pess = useMemo(() => showScenarios ? projectNW(currentNW, Math.max(annRate-band,-0.99), monthly, months) : null, [currentNW, annRate, band, monthly, months, showScenarios]);
+  const opti = useMemo(() => showScenarios ? projectNW(currentNW, annRate+band, monthly, months) : null, [currentNW, annRate, band, monthly, months, showScenarios]);
 
   const nearestTarget = useMemo(() => {
     const now = Date.now();
@@ -2083,11 +2087,11 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
           <div>
             <div className="label">Annual growth rate</div>
             <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
-              <input type="range" className="slider" min="-20" max="40" step="0.5"
+              <input type="range" className="slider" min="-20" max="20" step="0.5"
                 value={parseFloat(rateInput)||0}
                 onChange={e=>setRateInput(String(e.target.value))}/>
-              <input className="input" type="number" step="0.5"
-                style={{width:70,padding:"4px 8px",fontSize:".8rem"}}
+              <input className="input" type="number" step="0.5" min="-20" max="20"
+                style={{width:64,padding:"4px 8px",fontSize:".8rem"}}
                 value={rateInput} onChange={e=>setRateInput(e.target.value)}/>
               <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>%</span>
             </div>
@@ -2103,30 +2107,50 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
                 value={monthly} onChange={e=>{setMonthly(Number(e.target.value)||0);setMonthlyOverridden(true);}}/>
               <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>{displayCurrency}/mo</span>
             </div>
-            {netMonthlyCashflow!=null&&(
-              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:4,display:"flex",alignItems:"center",gap:6}}>
-                From cashflow: {fmt(Math.max(0,Math.round(netMonthlyCashflow)),displayCurrency,true)}/mo
-                {monthlyOverridden&&<button onClick={()=>{setMonthly(cfDefault);setMonthlyOverridden(false);}}
-                  style={{background:"none",border:"none",padding:0,cursor:"pointer",color:"var(--gold)",fontSize:".62rem"}}>↺ reset</button>}
+            {cfNet!=null&&(
+              <div style={{marginTop:6}}>
+                <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginBottom:4,display:"flex",justifyContent:"space-between"}}>
+                  <span>Recommended: {cfPct}% of net cashflow</span>
+                  <span style={{color:"var(--gold)"}}>{fmt(Math.round(cfNet*cfPct/100),displayCurrency,true)}/mo</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <input type="range" className="slider" min="0" max="100" step="5"
+                    style={{flex:1}} value={cfPct}
+                    onChange={e=>{const p=Number(e.target.value);setCfPct(p);setMonthly(Math.round(cfNet*p/100));setMonthlyOverridden(false);}}/>
+                  {monthlyOverridden&&(
+                    <button onClick={()=>{setMonthly(Math.round(cfNet*cfPct/100));setMonthlyOverridden(false);}}
+                      style={{background:"none",border:"none",padding:0,cursor:"pointer",color:"var(--gold)",fontSize:".62rem",whiteSpace:"nowrap"}}>↺ use</button>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
-        <div style={{marginTop:12,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
-          <div>
-            <span style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Horizon: </span>
-            {[60,120,240,360].map(h=>(
+        <div style={{marginTop:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}}>
+            <span style={{fontSize:".7rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Horizon:</span>
+            {[12,24,36,48,60,120,240,360].map(h=>(
               <button key={h} onClick={()=>setHorizon(h)}
                 className="btn btn-ghost btn-xs"
-                style={{marginLeft:4,...(horizon===h?{borderColor:"var(--gold)",color:"var(--gold)"}:{})}}>
-                {h/12}y
+                style={horizon===h?{borderColor:"var(--gold)",color:"var(--gold)"}:{}}>
+                {h<60?`${h/12}y`:h===60?"5y":h===120?"10y":h===240?"20y":"30y"}
               </button>
             ))}
           </div>
+        </div>
+        <div style={{marginTop:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <button className="btn btn-ghost btn-xs" onClick={()=>setShowScenarios(s=>!s)}
             style={showScenarios?{borderColor:"var(--gold)",color:"var(--gold)"}:{}}>
-            ±2% scenarios
+            ± scenarios
           </button>
+          {showScenarios&&(
+            <>
+              <input type="range" className="slider" min="0.5" max="10" step="0.5"
+                style={{width:90}} value={bandPct}
+                onChange={e=>setBandPct(Number(e.target.value))}/>
+              <span style={{fontFamily:"var(--fm)",fontSize:".68rem",color:"var(--muted2)",minWidth:32}}>±{bandPct}%</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -2181,7 +2205,7 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
         </div>
         {showScenarios&&(
           <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap"}}>
-            {[["var(--neg)","Pessimistic",annRate-0.02],["var(--gold)","Base",annRate],["var(--pos)","Optimistic",annRate+0.02]].map(([c,l,r])=>(
+            {[["var(--neg)","Pessimistic",annRate-band],["var(--gold)","Base",annRate],["var(--pos)","Optimistic",annRate+band]].map(([c,l,r])=>(
               <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
                 <div className="scenario-dot" style={{background:c}}/>
                 <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
