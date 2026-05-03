@@ -149,6 +149,10 @@ const localDatetimeStr = ts => {
 // ─────────────────────────────────────────────────────────────
 const TGT_COLORS = ["#6fb5a2","#b07eb8","#8ba3c7","#d4845a","#c8a96e","#e07070"];
 
+// Scenario band in percentage points applied per risk level to eligible account classes
+const SCENARIO_BANDS = { "very-low": 0.5, "low": 1.5, "medium": 3, "high": 5, "very-high": 8 };
+const SCENARIO_ELIGIBLE = new Set(["investments", "retirement", "property"]);
+
 // World Bank country codes by currency for inflation fetch
 const CUR_TO_ISO2 = { GBP:"GB", USD:"US", AUD:"AU", SGD:"SG", IDR:"ID", CNY:"CN" };
 
@@ -807,7 +811,7 @@ function CurrencyDropdown({ currencies, value, rates, onChange }) {
 //  ACCOUNT MODAL
 // ─────────────────────────────────────────────────────────────
 function AccountModal({ initial, onSave, onClose }) {
-  const empty = { name:"", currency:"GBP", liquidity:"liquid", risk:"very-low", class:"cash-savings", type:"asset", notes:"", vesting:null };
+  const empty = { name:"", currency:"GBP", liquidity:"liquid", risk:"very-low", class:"cash-savings", type:"asset", notes:"", growthRate:0, vesting:null };
   const [form, setForm] = useState(initial || empty);
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
 
@@ -868,6 +872,28 @@ function AccountModal({ initial, onSave, onClose }) {
         <div className="frow">
           <div className="label">Notes (optional)</div>
           <input className="input" placeholder="Any notes…" value={form.notes} onChange={e=>set("notes",e.target.value)}/>
+        </div>
+        <div className="frow">
+          <div className="label">
+            {form.type==="liability" ? "Annual interest rate % (debt grows if unpaid)" : "Estimated annual growth rate %"}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <input className="input" type="number" step="0.5" min="-20" max="100"
+              style={{width:90}}
+              value={form.growthRate ?? 0}
+              onChange={e=>set("growthRate", parseFloat(e.target.value)||0)}/>
+            <span style={{fontSize:".78rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>% p.a.</span>
+            {form.type==="liability" && (Number(form.growthRate)||0) > 0 && (
+              <span style={{fontSize:".72rem",fontFamily:"var(--fm)",color:"var(--neg)"}}>
+                ⚠ debt will grow
+              </span>
+            )}
+          </div>
+          <div style={{fontSize:".63rem",color:"var(--muted)",marginTop:3,fontFamily:"var(--fm)"}}>
+            {form.type==="liability"
+              ? "Used in Model tab to project debt growth. 0% = balance stays flat."
+              : "Used in Model tab for portfolio projection. 0% = no growth assumed."}
+          </div>
         </div>
 
         {/* Vesting schedule */}
@@ -1832,15 +1858,23 @@ function AccountsPage({ accounts, displayCurrency, toDisplay, excluded, onToggle
 // ─────────────────────────────────────────────────────────────
 //  TARGET MODAL
 // ─────────────────────────────────────────────────────────────
-function TargetModal({ initial, displayCurrency, onSave, onClose }) {
+function TargetModal({ initial, displayCurrency, inflationRate, onSave, onClose }) {
   const [label, setLabel] = useState(initial?.label || "");
   const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
   const [dateStr, setDateStr] = useState(() => {
     const d = initial ? new Date(Number(initial.targetTs)) : new Date(Date.now()+365*86400000);
     return d.toISOString().slice(0,10);
   });
+  const [inflAdj, setInflAdj] = useState(initial?.inflationAdjusted || false);
+
   const minDate = new Date(Date.now()+86400000).toISOString().slice(0,10);
   const valid = label.trim() && Number(amount)>0 && dateStr >= minDate;
+
+  const yearsToDeadline = dateStr ? (new Date(dateStr).getTime() - Date.now()) / (365.25*86400000) : 0;
+  const nominalPreview = inflAdj && inflationRate > 0 && Number(amount) > 0
+    ? Number(amount) * (1 + inflationRate / 100) ** Math.max(yearsToDeadline, 0)
+    : null;
+
   const save = () => {
     if (!valid) return;
     onSave({
@@ -1848,6 +1882,7 @@ function TargetModal({ initial, displayCurrency, onSave, onClose }) {
       amount: Number(amount),
       currency: displayCurrency,
       targetTs: new Date(dateStr+'T00:00:00').getTime(),
+      inflationAdjusted: inflAdj,
       ...(initial ? {id: initial.id, createdTs: initial.createdTs} : {id: uid(), createdTs: Date.now()}),
     });
   };
@@ -1859,6 +1894,32 @@ function TargetModal({ initial, displayCurrency, onSave, onClose }) {
         <input className="input" value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. Financial Independence"/>
         <div className="label" style={{marginTop:10}}>Target Amount ({displayCurrency})</div>
         <input className="input" type="number" min="0" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="e.g. 500000"/>
+
+        {/* Amount type toggle */}
+        <div style={{display:"flex",gap:6,marginTop:8,marginBottom:2}}>
+          <button className={`btn btn-xs ${!inflAdj?"btn-primary":"btn-ghost"}`} onClick={()=>setInflAdj(false)}>
+            Nominal
+          </button>
+          <button className={`btn btn-xs ${inflAdj?"btn-primary":"btn-ghost"}`} onClick={()=>setInflAdj(true)}>
+            Today's money (inflation-adjusted)
+          </button>
+        </div>
+        {inflAdj && inflationRate === 0 && (
+          <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--neg)",marginBottom:6}}>
+            ⚠ App-wide inflation rate is 0% — set one in the Model tab.
+          </div>
+        )}
+        {nominalPreview != null && (
+          <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginBottom:6}}>
+            ≈ {fmt(nominalPreview, displayCurrency)} nominal by target date ({inflationRate}% inflation)
+          </div>
+        )}
+        {!inflAdj && (
+          <div style={{fontSize:".63rem",fontFamily:"var(--fm)",color:"var(--muted)",marginBottom:6}}>
+            This is the exact future amount — no inflation adjustment.
+          </div>
+        )}
+
         <div className="label" style={{marginTop:10}}>Target Date</div>
         <input className="input" type="date" value={dateStr} min={minDate} onChange={e=>setDateStr(e.target.value)}/>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:16}}>
@@ -1875,7 +1936,7 @@ function TargetModal({ initial, displayCurrency, onSave, onClose }) {
 // ─────────────────────────────────────────────────────────────
 //  TARGETS PAGE
 // ─────────────────────────────────────────────────────────────
-function TargetsPage({ targets, displayCurrency, toDisplay, currentNW, onAdd, onUpdate, onDelete }) {
+function TargetsPage({ targets, displayCurrency, toDisplay, currentNW, inflationRate, onAdd, onUpdate, onDelete }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState(null);
   const now = Date.now();
@@ -1893,9 +1954,13 @@ function TargetsPage({ targets, displayCurrency, toDisplay, currentNW, onAdd, on
         <div className="empty"><div className="empty-icon">🎯</div>No targets yet. Add one to track your progress.</div>
       )}
       {sorted.map(t=>{
-        const tVal = t.currency===displayCurrency ? t.amount : toDisplay(t.amount, t.currency);
-        const pct = tVal>0 ? Math.min(currentNW/tVal*100,100) : 0;
-        const achieved = currentNW >= tVal;
+        const baseVal = t.currency===displayCurrency ? t.amount : toDisplay(t.amount, t.currency);
+        const yearsLeft = Math.max((Number(t.targetTs) - now) / (365.25*86400000), 0);
+        const nominalVal = t.inflationAdjusted && inflationRate > 0
+          ? baseVal * (1 + inflationRate / 100) ** yearsLeft
+          : baseVal;
+        const pct = nominalVal > 0 ? Math.min(currentNW / nominalVal * 100, 100) : 0;
+        const achieved = currentNW >= nominalVal;
         const isPast = Number(t.targetTs) < now;
         const daysLeft = Math.ceil((Number(t.targetTs)-now)/86400000);
         return (
@@ -1909,14 +1974,20 @@ function TargetsPage({ targets, displayCurrency, toDisplay, currentNW, onAdd, on
                   {new Date(Number(t.targetTs)).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
                   {!achieved&&!isPast&&<span style={{marginLeft:8}}>{daysLeft}d left</span>}
                   {isPast&&!achieved&&<span style={{marginLeft:8,color:"var(--neg)"}}>overdue</span>}
+                  {t.inflationAdjusted&&<span style={{marginLeft:8,color:"var(--gold)"}}>inflation-adj.</span>}
                 </div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
                 <div style={{fontSize:"1rem",fontFamily:"var(--fd)",color:achieved?"var(--pos)":"var(--gold)"}}>
-                  {fmt(tVal,displayCurrency)}
+                  {fmt(nominalVal,displayCurrency)}
                 </div>
+                {t.inflationAdjusted && nominalVal !== baseVal && (
+                  <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                    {fmt(baseVal,displayCurrency,true)} today's money
+                  </div>
+                )}
                 <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
-                  {fmt(currentNW,displayCurrency)} now
+                  {fmt(currentNW,displayCurrency,true)} now
                 </div>
               </div>
             </div>
@@ -1933,8 +2004,8 @@ function TargetsPage({ targets, displayCurrency, toDisplay, currentNW, onAdd, on
           </div>
         );
       })}
-      {showAdd&&<TargetModal displayCurrency={displayCurrency} onSave={d=>{onAdd(d);setShowAdd(false)}} onClose={()=>setShowAdd(false)}/>}
-      {editing&&<TargetModal initial={editing} displayCurrency={displayCurrency} onSave={d=>{onUpdate(d);setEditing(null)}} onClose={()=>setEditing(null)}/>}
+      {showAdd&&<TargetModal displayCurrency={displayCurrency} inflationRate={inflationRate} onSave={d=>{onAdd(d);setShowAdd(false)}} onClose={()=>setShowAdd(false)}/>}
+      {editing&&<TargetModal initial={editing} displayCurrency={displayCurrency} inflationRate={inflationRate} onSave={d=>{onUpdate(d);setEditing(null)}} onClose={()=>setEditing(null)}/>}
     </div>
   );
 }
@@ -2016,14 +2087,23 @@ const projectNW = (start, annRate, monthlyContrib, months) => {
   return pts;
 };
 
-// Multi-bucket projection: existing NW grows at globalAnnRate (no fixed contrib),
-// each bucket contributes its own monthly amount at its own annRate.
-const projectNWMulti = (start, globalAnnRate, buckets, months) => {
-  const baseMr = (1 + globalAnnRate) ** (1/12) - 1;
-  const bucketMrs = buckets.map(b => (1 + b.annRate / 100) ** (1/12) - 1);
+// Full portfolio projection: each account grows at its own rate; buckets are separate annuities.
+// direction: -1 (pessimistic) | 0 (base) | 1 (optimistic) — shifts eligible accounts by their risk band.
+// inflAdjPct: percentage points to subtract from every rate (e.g. 2.5 for 2.5% inflation).
+// accountSnapshots: [{ signedBalance, growthRate, class, risk }]
+// buckets: [{ amount, annRate }]
+const projectFullNW = (accountSnapshots, buckets, months, direction = 0, inflAdjPct = 0) => {
+  const accMrs = accountSnapshots.map(a => {
+    let rate = a.growthRate - inflAdjPct;
+    if (direction !== 0 && SCENARIO_ELIGIBLE.has(a.class))
+      rate += direction * (SCENARIO_BANDS[a.risk] ?? 0);
+    return (1 + rate / 100) ** (1/12) - 1;
+  });
+  const bucketMrs = buckets.map(b => (1 + (b.annRate - inflAdjPct) / 100) ** (1/12) - 1);
   const pts = [];
   for (let m = 0; m <= months; m++) {
-    let v = start * (1 + baseMr) ** m;
+    let v = 0;
+    accountSnapshots.forEach((a, i) => { v += a.signedBalance * (1 + accMrs[i]) ** m; });
     buckets.forEach((b, i) => {
       const mr = bucketMrs[i];
       v += mr !== 0 ? b.amount * ((1 + mr) ** m - 1) / mr : b.amount * m;
@@ -2055,9 +2135,7 @@ const solveRequiredRate = (start, monthlyContrib, target, months) => {
 // ─────────────────────────────────────────────────────────────
 //  MODEL PAGE  (Phase 3 · What-If)
 // ─────────────────────────────────────────────────────────────
-function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMonthlyCashflow }) {
-  const defaultRate = 3.5;
-  const [rateInput, setRateInput] = useState(String(defaultRate));
+function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historicalRate, displayCurrency, inflationRate, onSaveInflation, netMonthlyCashflow }) {
   const cfNet = netMonthlyCashflow!=null ? Math.max(0, netMonthlyCashflow) : null;
   const [cfPct, setCfPct] = useState(50);
   const cfDefault = cfNet!=null ? Math.round(cfNet * 0.5) : 0;
@@ -2065,7 +2143,6 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   const [monthlyOverridden, setMonthlyOverridden] = useState(false);
   const [horizon, setHorizon] = useState(120);
   const [showScenarios, setShowScenarios] = useState(false);
-  const [bandPct, setBandPct] = useState(2);
   const svgRef = useRef(null);
   const [tipMonth, setTipMonth] = useState(null);
 
@@ -2080,18 +2157,26 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   const updateBucket = (id, key, val) => setBuckets(prev => prev.map(b => b.id===id ? {...b, [key]:val} : b));
   const removeBucket = id => setBuckets(prev => prev.filter(b => b.id!==id));
 
-  // When bucket total changes, sync the monthly display value (only if not manually overridden)
   useEffect(() => {
     if (showBreakdown && buckets.length > 0) setMonthly(bucketTotal);
   }, [showBreakdown, bucketTotal]);
 
-  // ── inflation ──────────────────────────────────────────────
-  const [inflInput, setInflInput] = useState("2.0");
+  // ── inflation (app-wide, synced via prop) ──────────────────
+  const [inflInput, setInflInput] = useState(() => String(inflationRate));
   const [inflFetching, setInflFetching] = useState(false);
-  const [inflSource, setInflSource] = useState(null); // { label, value }
+  const [inflSource, setInflSource] = useState(null);
   const [showRealTerms, setShowRealTerms] = useState(false);
 
-  const inflRate = parseFloat(inflInput) / 100 || 0;
+  // Sync input when app-wide value loads from Settings
+  useEffect(() => { setInflInput(String(inflationRate)); }, [inflationRate]);
+
+  const inflPct = parseFloat(inflInput) || 0; // percentage points, e.g. 2.5
+
+  const handleInflChange = (val) => {
+    setInflInput(val);
+    const n = parseFloat(val);
+    if (!isNaN(n)) onSaveInflation(n);
+  };
 
   const doFetchInfl = async (preferLondon) => {
     setInflFetching(true);
@@ -2099,24 +2184,43 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
     setInflFetching(false);
     if (!result) return;
     if (preferLondon && result.london != null) {
-      setInflInput(result.london.toFixed(1));
+      handleInflChange(result.london.toFixed(1));
       setInflSource({ label: "ONS London CPIH", value: result.london });
     } else if (result.country != null) {
       const label = displayCurrency === "GBP" ? "World Bank UK CPI" : `World Bank ${CUR_TO_ISO2[displayCurrency]} CPI`;
-      setInflInput(result.country.toFixed(1));
+      handleInflChange(result.country.toFixed(1));
       setInflSource({ label, value: result.country });
     }
   };
 
-  const annRate = parseFloat(rateInput) / 100 || 0;
-  const band = bandPct / 100;
+  const inflAdjPct = showRealTerms ? inflPct : 0;
   const months = horizon;
 
-  // effective rate used for projections (nominal or real)
-  const effectiveRate = showRealTerms ? annRate - inflRate : annRate;
-  const effectiveBuckets = showRealTerms
-    ? buckets.map(b => ({ ...b, annRate: b.annRate - inflRate * 100 }))
-    : buckets;
+  // ── per-account snapshots ──────────────────────────────────
+  const accountSnapshots = useMemo(() => {
+    return (accounts||[])
+      .filter(a => !excluded.has(a.id) && !excluded.has(`cls:${a.class}`))
+      .map(a => {
+        const raw = vestedBalance(a);
+        if (raw === null) return null;
+        const conv = toDisplay(raw, a.currency);
+        const signed = a.type === "liability" ? -Math.abs(conv) : conv;
+        return { id: a.id, name: a.name, growthRate: Number(a.growthRate) || 0, class: a.class, risk: a.risk, type: a.type, signedBalance: signed };
+      })
+      .filter(Boolean);
+  }, [accounts, excluded, toDisplay]);
+
+  // Weighted blended rate (NW-weighted): informational display only
+  const blendedRate = useMemo(() => {
+    const nw = accountSnapshots.reduce((s,a) => s + a.signedBalance, 0);
+    if (Math.abs(nw) < 1) return null;
+    return accountSnapshots.reduce((s,a) => s + a.signedBalance * a.growthRate, 0) / nw;
+  }, [accountSnapshots]);
+
+  // Liabilities with a positive interest rate (growing debt warning)
+  const growingLiabilities = useMemo(() =>
+    (accounts||[]).filter(a => a.type === "liability" && (Number(a.growthRate)||0) > 0),
+  [accounts]);
 
   // ── upcoming targets (future deadlines only) ──────────────
   const upcomingTargets = useMemo(() => {
@@ -2127,15 +2231,12 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
       .map((t,i) => ({ ...t, color: TGT_COLORS[i % TGT_COLORS.length] }));
   }, [targets]);
 
-  // targets that fall within the horizon window
   const visibleTargets = useMemo(() => {
     const cutoff = Date.now() + months * 30 * 86400000;
     return upcomingTargets.filter(t => Number(t.targetTs) <= cutoff);
   }, [upcomingTargets, months]);
 
-  // selected target IDs — initialise with all visible ids whenever visible set changes
   const [selectedIds, setSelectedIds] = useState(() => new Set(visibleTargets.map(t=>t.id)));
-  // sync when visible targets change (e.g. horizon shrinks/grows)
   const prevVisibleRef = useRef(null);
   useEffect(() => {
     const prevIds = prevVisibleRef.current;
@@ -2154,47 +2255,59 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
 
   const activeTargets = visibleTargets.filter(t => selectedIds.has(t.id));
 
-  // per-target stats
-  const tgtStats = useMemo(() => activeTargets.map(t => {
-    const tgtVal = Number(t.amount);
-    const moToReach = monthsToReach(currentNW, effectiveRate, effectiveMonthly, tgtVal);
-    const moRemaining = Math.ceil((Number(t.targetTs)-Date.now())/2628000000);
-    const reqRate = moRemaining > 0 ? solveRequiredRate(currentNW, effectiveMonthly, tgtVal, moRemaining) : null;
-    return { t, tgtVal, moToReach, moRemaining, reqRate, color: t.color };
-  }), [activeTargets, currentNW, effectiveRate, effectiveMonthly]);
-
   // remaining cashflow (spending buffer)
   const remainingCf = cfNet != null ? cfNet - effectiveMonthly : null;
 
-  // projections — use multi-bucket when breakdown is active
-  const base = useMemo(() => {
-    if (showBreakdown && effectiveBuckets.length > 0)
-      return projectNWMulti(currentNW, effectiveRate, effectiveBuckets, months);
-    return projectNW(currentNW, effectiveRate, effectiveMonthly, months);
-  }, [currentNW, effectiveRate, effectiveMonthly, months, showBreakdown, effectiveBuckets]);
+  // ── projections ────────────────────────────────────────────
+  // Long horizon (1200 mo) used only for target "time to reach" stats
+  const projLong = useMemo(() =>
+    accountSnapshots.length > 0
+      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], 1200, 0, inflAdjPct)
+      : null,
+  [accountSnapshots, buckets, showBreakdown, inflAdjPct]);
 
-  const pess = useMemo(() => {
-    if (!showScenarios) return null;
-    const r = Math.max(effectiveRate - band, -0.99);
-    if (showBreakdown && effectiveBuckets.length > 0)
-      return projectNWMulti(currentNW, r, effectiveBuckets, months);
-    return projectNW(currentNW, r, effectiveMonthly, months);
-  }, [currentNW, effectiveRate, band, effectiveMonthly, months, showScenarios, showBreakdown, effectiveBuckets]);
+  const base = useMemo(() =>
+    accountSnapshots.length > 0
+      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], months, 0, inflAdjPct)
+      : projectNW(currentNW, 0, effectiveMonthly, months),
+  [accountSnapshots, buckets, showBreakdown, months, inflAdjPct, currentNW, effectiveMonthly]);
 
-  const opti = useMemo(() => {
-    if (!showScenarios) return null;
-    if (showBreakdown && effectiveBuckets.length > 0)
-      return projectNWMulti(currentNW, effectiveRate + band, effectiveBuckets, months);
-    return projectNW(currentNW, effectiveRate + band, effectiveMonthly, months);
-  }, [currentNW, effectiveRate, band, effectiveMonthly, months, showScenarios, showBreakdown, effectiveBuckets]);
+  const pess = useMemo(() =>
+    showScenarios && accountSnapshots.length > 0
+      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], months, -1, inflAdjPct)
+      : null,
+  [accountSnapshots, buckets, showBreakdown, months, showScenarios, inflAdjPct]);
+
+  const opti = useMemo(() =>
+    showScenarios && accountSnapshots.length > 0
+      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], months, +1, inflAdjPct)
+      : null,
+  [accountSnapshots, buckets, showBreakdown, months, showScenarios, inflAdjPct]);
+
+  // per-target stats — moToReach uses projLong; reqRate uses blended-rate approximation
+  const tgtStats = useMemo(() => activeTargets.map(t => {
+    const yearsToDeadline = (Number(t.targetTs) - Date.now()) / (365.25 * 86400000);
+    const nominalAmount = t.inflationAdjusted && inflPct > 0
+      ? Number(t.amount) * (1 + inflPct / 100) ** Math.max(yearsToDeadline, 0)
+      : Number(t.amount);
+    const tgtVal = nominalAmount;
+    const moRemaining = Math.ceil((Number(t.targetTs)-Date.now())/2628000000);
+    let moToReach = null;
+    if (projLong) {
+      if (projLong[0] >= tgtVal) moToReach = 0;
+      else { const idx = projLong.findIndex(v => v >= tgtVal); moToReach = idx === -1 ? null : idx; }
+    }
+    const reqRate = moRemaining > 0 ? solveRequiredRate(currentNW, effectiveMonthly, tgtVal, moRemaining) : null;
+    return { t, tgtVal, nominalAmount, moToReach, moRemaining, reqRate, color: t.color };
+  }), [activeTargets, projLong, currentNW, effectiveMonthly, inflPct]);
 
   // per-bucket projected gain from contributions at horizon
   const bucketStats = useMemo(() => buckets.map(b => {
-    const mr = (1 + b.annRate / 100) ** (1/12) - 1;
+    const mr = (1 + (b.annRate - inflAdjPct) / 100) ** (1/12) - 1;
     const fv = mr !== 0 ? b.amount * ((1+mr)**months - 1) / mr : b.amount * months;
     const contrib = b.amount * months;
     return { ...b, fv, contrib, gain: fv - contrib };
-  }), [buckets, months]);
+  }), [buckets, months, inflAdjPct]);
 
   // SVG chart
   const tgtValues = activeTargets.map(t=>Number(t.amount));
@@ -2232,32 +2345,47 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
 
   return (
     <div className="page">
+      {/* ── growing liability warning ── */}
+      {growingLiabilities.length > 0 && (
+        <div style={{background:"#3a2020",border:"1px solid var(--neg)",borderRadius:"var(--r)",padding:"10px 14px",marginBottom:10,fontSize:".75rem",fontFamily:"var(--fm)",color:"#e8a0a0",lineHeight:1.5}}>
+          ⚠ Growing {growingLiabilities.length > 1 ? "debts" : "debt"} — will compound unless paid down:{" "}
+          {growingLiabilities.map((a,i) => (
+            <span key={a.id}>{i>0?", ":""}<strong>{a.name}</strong> at {Number(a.growthRate).toFixed(1)}% p.a.</span>
+          ))}
+        </div>
+      )}
+
       {/* ── controls ── */}
       <div className="model-card">
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,flexWrap:"wrap"}}>
           <div>
-            <div className="label">Annual growth rate</div>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginTop:6}}>
-              <input type="range" className="slider" min="-20" max="20" step="0.5"
-                value={parseFloat(rateInput)||0}
-                onChange={e=>setRateInput(String(e.target.value))}/>
-              <input className="input" type="number" step="0.5" min="-20" max="20"
-                style={{width:64,padding:"4px 8px",fontSize:".8rem"}}
-                value={rateInput} onChange={e=>setRateInput(e.target.value)}/>
-              <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>%</span>
-            </div>
-            {historicalRate!=null&&<div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:4}}>
-              Historical: {(historicalRate*100).toFixed(1)}% p.a.
-            </div>}
-            {inflRate>0&&(
-              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:3}}>
-                Real return:{" "}
-                <span style={{color:(annRate-inflRate)>=0?"var(--pos)":"var(--neg)"}}>
-                  {((annRate-inflRate)*100).toFixed(1)}%
-                </span>
-                {" "}(nominal {(annRate*100).toFixed(1)}% − inflation {(inflRate*100).toFixed(1)}%)
+            <div className="label">Portfolio growth</div>
+            <div style={{marginTop:4}}>
+              {blendedRate != null ? (
+                <div style={{fontSize:"1.05rem",fontFamily:"var(--fd)",color:"var(--gold)"}}>
+                  {blendedRate >= 0 ? "+" : ""}{blendedRate.toFixed(1)}% p.a. blended
+                </div>
+              ) : (
+                <div style={{fontSize:".75rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                  Set growth rates on your accounts to see a projection.
+                </div>
+              )}
+              {inflPct > 0 && blendedRate != null && (
+                <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:3}}>
+                  Real return:{" "}
+                  <span style={{color:(blendedRate-inflPct)>=0?"var(--pos)":"var(--neg)"}}>
+                    {(blendedRate-inflPct).toFixed(1)}%
+                  </span>
+                  {" "}(nominal {blendedRate.toFixed(1)}% − inflation {inflPct.toFixed(1)}%)
+                </div>
+              )}
+              {historicalRate!=null&&<div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:3}}>
+                Historical: {(historicalRate*100).toFixed(1)}% p.a.
+              </div>}
+              <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:4}}>
+                Weighted average of account growth rates. Edit rates in Accounts tab.
               </div>
-            )}
+            </div>
           </div>
           <div>
             <div className="label">
@@ -2351,11 +2479,11 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
         {/* ── inflation ── */}
         <div style={{marginTop:12,borderTop:"1px solid var(--border)",paddingTop:12,display:"flex",alignItems:"flex-start",gap:16,flexWrap:"wrap"}}>
           <div style={{flex:"0 0 auto"}}>
-            <div className="label" style={{marginBottom:4}}>Inflation rate</div>
+            <div className="label" style={{marginBottom:4}}>Inflation rate <span style={{fontWeight:400,color:"var(--muted)",fontSize:".68rem"}}>(app-wide)</span></div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <input className="input" type="number" min="0" max="30" step="0.1"
                 style={{width:64,padding:"4px 8px",fontSize:".8rem"}}
-                value={inflInput} onChange={e=>setInflInput(e.target.value)}/>
+                value={inflInput} onChange={e=>handleInflChange(e.target.value)}/>
               <span style={{fontSize:".75rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>%</span>
               <button className="btn btn-ghost btn-xs"
                 disabled={inflFetching}
@@ -2413,12 +2541,9 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
             ± scenarios
           </button>
           {showScenarios&&(
-            <>
-              <input type="range" className="slider" min="0.5" max="10" step="0.5"
-                style={{width:90}} value={bandPct}
-                onChange={e=>setBandPct(Number(e.target.value))}/>
-              <span style={{fontFamily:"var(--fm)",fontSize:".68rem",color:"var(--muted2)",minWidth:32}}>±{bandPct}%</span>
-            </>
+            <span style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+              Band per risk: very-low ±0.5%, low ±1.5%, medium ±3%, high ±5%, very-high ±8% — applied to investments, retirement, property
+            </span>
           )}
         </div>
 
@@ -2522,16 +2647,11 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
         </div>
         {showScenarios&&(
           <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap"}}>
-            {[["var(--neg)","Pessimistic",effectiveRate-band],["var(--gold)","Base",effectiveRate],["var(--pos)","Optimistic",effectiveRate+band]].map(([c,l,r])=>(
-              <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
+            {[["var(--neg)","Pessimistic",pess],["var(--gold)","Base",base],["var(--pos)","Optimistic",opti]].map(([c,l,proj])=>(
+              proj && <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
                 <div className="scenario-dot" style={{background:c}}/>
                 <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
-                  {l}: {(r*100).toFixed(1)}% → {fmt(
-                    showBreakdown&&effectiveBuckets.length>0
-                      ? projectNWMulti(currentNW,r,effectiveBuckets,months).at(-1)
-                      : projectNW(currentNW,r,effectiveMonthly,months).at(-1),
-                    displayCurrency,true
-                  )}
+                  {l}: {fmt(proj.at(-1),displayCurrency,true)}
                 </span>
               </div>
             ))}
@@ -2627,8 +2747,15 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
                     <div>
                       <div style={{fontSize:".75rem",fontFamily:"var(--fd)",color:"var(--text)"}}>{t.label}</div>
                       <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
-                        {fmt(tgtVal,displayCurrency,true)} · due {deadline}
+                        {fmt(tgtVal,displayCurrency,true)}
+                        {t.inflationAdjusted && <span style={{color:"var(--gold)",marginLeft:4}}>nominal</span>}
+                        {" "}· due {deadline}
                       </div>
+                      {t.inflationAdjusted && tgtVal !== Number(t.amount) && (
+                        <div style={{fontSize:".58rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                          {fmt(Number(t.amount),displayCurrency,true)} in today's money
+                        </div>
+                      )}
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Time to reach</div>
@@ -2638,7 +2765,7 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Req. rate</div>
-                      <div style={{fontSize:".78rem",fontFamily:"var(--fd)",color:reqRate==null?"var(--muted)":reqRate<=annRate?"var(--pos)":"var(--neg)",marginTop:1}}>
+                      <div style={{fontSize:".78rem",fontFamily:"var(--fd)",color:reqRate==null?"var(--muted)":blendedRate!=null&&reqRate<=blendedRate/100?"var(--pos)":"var(--neg)",marginTop:1}}>
                         {reqRate==null?"—":`${(reqRate*100).toFixed(1)}%`}
                       </div>
                     </div>
@@ -3040,6 +3167,7 @@ export default function App() {
   const [cashflows, setCashflows] = useState([]);
   const [baselineId, setBaselineId] = useState(null);
   const [displayCurrency, setDisplayCurrency] = useState("GBP");
+  const [inflationRate, setInflationRate] = useState(2.0);
   const [excluded, setExcluded] = useState(new Set());
   const [rates, setRates] = useState({});
   const [ratesError, setRatesError] = useState(null);
@@ -3117,6 +3245,7 @@ export default function App() {
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
       if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
       try { if (data.settings?.growthTarget) setGrowthTarget(JSON.parse(data.settings.growthTarget)); } catch {}
+      if (data.settings?.inflationRate) setInflationRate(Number(data.settings.inflationRate));
       setLastSync(Date.now());
     } catch(e) { setSyncErr(e.message); }
     setSyncing(false);
@@ -3313,6 +3442,11 @@ export default function App() {
     try { await api.current.call("setSetting", {key:"growthTarget", value:target?JSON.stringify(target):""}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+  const saveInflationRate = async (rate) => {
+    setInflationRate(rate);
+    try { await api.current.call("setSetting", {key:"inflationRate", value:String(rate)}); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
   const updateMilestoneLabel = async (id, label) => {
     const m=milestones.find(m=>m.id===id);
     setMilestones(p=>p.map(x=>x.id===id?{...x,label}:x));
@@ -3404,8 +3538,8 @@ export default function App() {
             {page==="overview"&&<OverviewPage accounts={accounts} milestones={milestones} targets={targets} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onSaveMilestone={saveMilestone} onSetBaseline={setBaseline} growthTarget={growthTarget} onSetGrowthTarget={saveGrowthTargetSetting} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
             {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} onDeleteRecord={deleteRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
             {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
-            {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
-            {page==="model"&&<ModelPage currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
+            {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} inflationRate={inflationRate} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
+            {page==="model"&&<ModelPage accounts={accounts} excluded={excluded} toDisplay={toDisplay} currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency} inflationRate={inflationRate} onSaveInflation={saveInflationRate} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
             {page==="cash"&&<CashflowPage cashflows={cashflows} displayCurrency={displayCurrency} toDisplay={toDisplay} onAdd={addCashflow} onUpdate={updateCashflow} onDelete={deleteCashflow}/>}
           </>;
         })()}
