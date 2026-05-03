@@ -503,6 +503,41 @@ function LoadingPage({ onCancel }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+//  UNAUTHORIZED
+// ─────────────────────────────────────────────────────────────
+function UnauthorizedPage({ onSignOut }) {
+  return (
+    <div className="setup">
+      <style>{STYLE}</style>
+      <div className="setup-card" style={{textAlign:"center"}}>
+        <div style={{fontSize:"2.2rem",marginBottom:16}}>🔒</div>
+        <div className="setup-title">Access Denied</div>
+        <div className="setup-sub" style={{marginBottom:20}}>
+          Your Google account doesn't have permission to access this app.
+        </div>
+        <div style={{
+          background:"var(--s2)",border:"1px solid var(--border2)",borderRadius:"var(--r)",
+          padding:"16px 20px",marginBottom:24,textAlign:"left",
+        }}>
+          <div style={{fontFamily:"var(--fm)",fontSize:".65rem",color:"var(--muted)",letterSpacing:".1em",textTransform:"uppercase",marginBottom:8}}>Want access?</div>
+          <div style={{fontFamily:"var(--fm)",fontSize:".82rem",color:"var(--text)",lineHeight:1.6}}>
+            Reach out to the app owner at{" "}
+            <a href="mailto:kennedy.putra.kusumo@gmail.com"
+              style={{color:"var(--gold)",textDecoration:"none",fontWeight:600}}>
+              kennedy.putra.kusumo@gmail.com
+            </a>
+            {" "}to request access.
+          </div>
+        </div>
+        <button className="btn btn-ghost btn-xs" onClick={onSignOut}>
+          ← Sign in with a different account
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 //  SIGN IN
 // ─────────────────────────────────────────────────────────────
 function SignInPage({ gsiReady }) {
@@ -3474,6 +3509,7 @@ export default function App() {
 
   if (!idToken) return <SignInPage gsiReady={gsiReady}/>;
   if (connecting || (apiUrl && !connected && !connectErr)) return <LoadingPage onCancel={signOut}/>;
+  if (connectErr === 'Unauthorized') return <UnauthorizedPage onSignOut={signOut}/>;
   if (!connected) return (
     <>
       <style>{STYLE}</style>
