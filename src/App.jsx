@@ -148,6 +148,29 @@ const localDatetimeStr = ts => {
 //  CHART HELPERS
 // ─────────────────────────────────────────────────────────────
 const TGT_COLORS = ["#6fb5a2","#b07eb8","#8ba3c7","#d4845a","#c8a96e","#e07070"];
+
+// World Bank country codes by currency for inflation fetch
+const CUR_TO_ISO2 = { GBP:"GB", USD:"US", AUD:"AU", SGD:"SG", IDR:"ID", CNY:"CN" };
+
+const fetchInflation = async (displayCurrency) => {
+  const iso2 = CUR_TO_ISO2[displayCurrency];
+  if (!iso2) return null;
+  // World Bank CPI annual % change, most recent value
+  const wb = await fetch(
+    `https://api.worldbank.org/v2/country/${iso2}/indicator/FP.CPI.TOTL.ZG?format=json&mrv=3&per_page=3`
+  ).then(r => r.json()).catch(() => null);
+  const wbVal = wb?.[1]?.find(d => d.value != null)?.value ?? null;
+  // ONS London CPIH (series L522) — only for GBP
+  let londonVal = null;
+  if (displayCurrency === "GBP") {
+    const ons = await fetch(
+      "https://api.ons.gov.uk/v1/timeseries/L522/dataset/MM23/data"
+    ).then(r => r.json()).catch(() => null);
+    const months = ons?.months;
+    if (months?.length) londonVal = parseFloat(months[months.length - 1]?.value) || null;
+  }
+  return { country: wbVal, london: londonVal };
+};
 const CLS_COLORS = {
   "cash-savings":"#7eb8a4","investments":"#c8a96e",
   "retirement":"#8ba3c7","property":"#b07eb8","debt":"#e07070",
@@ -1993,6 +2016,23 @@ const projectNW = (start, annRate, monthlyContrib, months) => {
   return pts;
 };
 
+// Multi-bucket projection: existing NW grows at globalAnnRate (no fixed contrib),
+// each bucket contributes its own monthly amount at its own annRate.
+const projectNWMulti = (start, globalAnnRate, buckets, months) => {
+  const baseMr = (1 + globalAnnRate) ** (1/12) - 1;
+  const bucketMrs = buckets.map(b => (1 + b.annRate / 100) ** (1/12) - 1);
+  const pts = [];
+  for (let m = 0; m <= months; m++) {
+    let v = start * (1 + baseMr) ** m;
+    buckets.forEach((b, i) => {
+      const mr = bucketMrs[i];
+      v += mr !== 0 ? b.amount * ((1 + mr) ** m - 1) / mr : b.amount * m;
+    });
+    pts.push(v);
+  }
+  return pts;
+};
+
 const monthsToReach = (start, annRate, monthlyContrib, target) => {
   if (start >= target) return 0;
   const mr = (1 + annRate) ** (1/12) - 1;
@@ -2029,9 +2069,54 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   const svgRef = useRef(null);
   const [tipMonth, setTipMonth] = useState(null);
 
+  // ── contribution breakdown ─────────────────────────────────
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [buckets, setBuckets] = useState([]);
+
+  const bucketTotal = buckets.reduce((s,b) => s + (b.amount||0), 0);
+  const effectiveMonthly = showBreakdown && buckets.length > 0 ? bucketTotal : monthly;
+
+  const addBucket = () => setBuckets(prev => [...prev, { id: uid(), name: "", amount: 0, annRate: 5 }]);
+  const updateBucket = (id, key, val) => setBuckets(prev => prev.map(b => b.id===id ? {...b, [key]:val} : b));
+  const removeBucket = id => setBuckets(prev => prev.filter(b => b.id!==id));
+
+  // When bucket total changes, sync the monthly display value (only if not manually overridden)
+  useEffect(() => {
+    if (showBreakdown && buckets.length > 0) setMonthly(bucketTotal);
+  }, [showBreakdown, bucketTotal]);
+
+  // ── inflation ──────────────────────────────────────────────
+  const [inflInput, setInflInput] = useState("2.0");
+  const [inflFetching, setInflFetching] = useState(false);
+  const [inflSource, setInflSource] = useState(null); // { label, value }
+  const [showRealTerms, setShowRealTerms] = useState(false);
+
+  const inflRate = parseFloat(inflInput) / 100 || 0;
+
+  const doFetchInfl = async (preferLondon) => {
+    setInflFetching(true);
+    const result = await fetchInflation(displayCurrency);
+    setInflFetching(false);
+    if (!result) return;
+    if (preferLondon && result.london != null) {
+      setInflInput(result.london.toFixed(1));
+      setInflSource({ label: "ONS London CPIH", value: result.london });
+    } else if (result.country != null) {
+      const label = displayCurrency === "GBP" ? "World Bank UK CPI" : `World Bank ${CUR_TO_ISO2[displayCurrency]} CPI`;
+      setInflInput(result.country.toFixed(1));
+      setInflSource({ label, value: result.country });
+    }
+  };
+
   const annRate = parseFloat(rateInput) / 100 || 0;
   const band = bandPct / 100;
   const months = horizon;
+
+  // effective rate used for projections (nominal or real)
+  const effectiveRate = showRealTerms ? annRate - inflRate : annRate;
+  const effectiveBuckets = showRealTerms
+    ? buckets.map(b => ({ ...b, annRate: b.annRate - inflRate * 100 }))
+    : buckets;
 
   // ── upcoming targets (future deadlines only) ──────────────
   const upcomingTargets = useMemo(() => {
@@ -2072,19 +2157,44 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
   // per-target stats
   const tgtStats = useMemo(() => activeTargets.map(t => {
     const tgtVal = Number(t.amount);
-    const moToReach = monthsToReach(currentNW, annRate, monthly, tgtVal);
+    const moToReach = monthsToReach(currentNW, effectiveRate, effectiveMonthly, tgtVal);
     const moRemaining = Math.ceil((Number(t.targetTs)-Date.now())/2628000000);
-    const reqRate = moRemaining > 0 ? solveRequiredRate(currentNW, monthly, tgtVal, moRemaining) : null;
+    const reqRate = moRemaining > 0 ? solveRequiredRate(currentNW, effectiveMonthly, tgtVal, moRemaining) : null;
     return { t, tgtVal, moToReach, moRemaining, reqRate, color: t.color };
-  }), [activeTargets, currentNW, annRate, monthly]);
+  }), [activeTargets, currentNW, effectiveRate, effectiveMonthly]);
 
   // remaining cashflow (spending buffer)
-  const remainingCf = cfNet != null ? cfNet - monthly : null;
+  const remainingCf = cfNet != null ? cfNet - effectiveMonthly : null;
 
-  // projections
-  const base = useMemo(() => projectNW(currentNW, annRate, monthly, months), [currentNW, annRate, monthly, months]);
-  const pess = useMemo(() => showScenarios ? projectNW(currentNW, Math.max(annRate-band,-0.99), monthly, months) : null, [currentNW, annRate, band, monthly, months, showScenarios]);
-  const opti = useMemo(() => showScenarios ? projectNW(currentNW, annRate+band, monthly, months) : null, [currentNW, annRate, band, monthly, months, showScenarios]);
+  // projections — use multi-bucket when breakdown is active
+  const base = useMemo(() => {
+    if (showBreakdown && effectiveBuckets.length > 0)
+      return projectNWMulti(currentNW, effectiveRate, effectiveBuckets, months);
+    return projectNW(currentNW, effectiveRate, effectiveMonthly, months);
+  }, [currentNW, effectiveRate, effectiveMonthly, months, showBreakdown, effectiveBuckets]);
+
+  const pess = useMemo(() => {
+    if (!showScenarios) return null;
+    const r = Math.max(effectiveRate - band, -0.99);
+    if (showBreakdown && effectiveBuckets.length > 0)
+      return projectNWMulti(currentNW, r, effectiveBuckets, months);
+    return projectNW(currentNW, r, effectiveMonthly, months);
+  }, [currentNW, effectiveRate, band, effectiveMonthly, months, showScenarios, showBreakdown, effectiveBuckets]);
+
+  const opti = useMemo(() => {
+    if (!showScenarios) return null;
+    if (showBreakdown && effectiveBuckets.length > 0)
+      return projectNWMulti(currentNW, effectiveRate + band, effectiveBuckets, months);
+    return projectNW(currentNW, effectiveRate + band, effectiveMonthly, months);
+  }, [currentNW, effectiveRate, band, effectiveMonthly, months, showScenarios, showBreakdown, effectiveBuckets]);
+
+  // per-bucket projected gain from contributions at horizon
+  const bucketStats = useMemo(() => buckets.map(b => {
+    const mr = (1 + b.annRate / 100) ** (1/12) - 1;
+    const fv = mr !== 0 ? b.amount * ((1+mr)**months - 1) / mr : b.amount * months;
+    const contrib = b.amount * months;
+    return { ...b, fv, contrib, gain: fv - contrib };
+  }), [buckets, months]);
 
   // SVG chart
   const tgtValues = activeTargets.map(t=>Number(t.amount));
@@ -2139,16 +2249,34 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
             {historicalRate!=null&&<div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:4}}>
               Historical: {(historicalRate*100).toFixed(1)}% p.a.
             </div>}
+            {inflRate>0&&(
+              <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:3}}>
+                Real return:{" "}
+                <span style={{color:(annRate-inflRate)>=0?"var(--pos)":"var(--neg)"}}>
+                  {((annRate-inflRate)*100).toFixed(1)}%
+                </span>
+                {" "}(nominal {(annRate*100).toFixed(1)}% − inflation {(inflRate*100).toFixed(1)}%)
+              </div>
+            )}
           </div>
           <div>
-            <div className="label">Monthly contribution</div>
+            <div className="label">
+              Monthly contribution
+              {showBreakdown&&buckets.length>0&&(
+                <span style={{color:"var(--gold)",fontFamily:"var(--fm)",fontSize:".62rem",marginLeft:6}}>
+                  {fmt(bucketTotal,displayCurrency,true)}/mo total
+                </span>
+              )}
+            </div>
             <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
               <input className="input" type="number" min="0" step="100"
                 style={{flex:1,padding:"4px 8px",fontSize:".8rem"}}
-                value={monthly} onChange={e=>{setMonthly(Number(e.target.value)||0);setMonthlyOverridden(true);}}/>
+                disabled={showBreakdown&&buckets.length>0}
+                value={showBreakdown&&buckets.length>0 ? bucketTotal : monthly}
+                onChange={e=>{setMonthly(Number(e.target.value)||0);setMonthlyOverridden(true);}}/>
               <span style={{color:"var(--muted)",fontFamily:"var(--fm)",fontSize:".75rem"}}>{displayCurrency}/mo</span>
             </div>
-            {cfNet!=null&&(
+            {cfNet!=null&&!(showBreakdown&&buckets.length>0)&&(
               <div style={{marginTop:6}}>
                 <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",marginBottom:4,display:"flex",justifyContent:"space-between"}}>
                   <span>Recommended: {cfPct}% of net cashflow</span>
@@ -2164,6 +2292,102 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
                   )}
                 </div>
               </div>
+            )}
+            {/* breakdown toggle */}
+            <div style={{marginTop:8}}>
+              <button className="btn btn-ghost btn-xs"
+                style={showBreakdown?{borderColor:"var(--gold)",color:"var(--gold)"}:{}}
+                onClick={()=>{
+                  setShowBreakdown(s=>!s);
+                  if (!showBreakdown && buckets.length===0) addBucket();
+                }}>
+                ⊕ breakdown
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── contribution breakdown rows ── */}
+        {showBreakdown&&(
+          <div style={{marginTop:12,borderTop:"1px solid var(--border)",paddingTop:12}}>
+            <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Contribution breakdown</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {buckets.map((b,idx)=>(
+                <div key={b.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:6,alignItems:"center"}}>
+                  <input className="input" placeholder={`Bucket ${idx+1} (e.g. Stocks ISA)`}
+                    style={{padding:"4px 8px",fontSize:".78rem"}}
+                    value={b.name} onChange={e=>updateBucket(b.id,"name",e.target.value)}/>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <input className="input" type="number" min="0" step="50"
+                      style={{width:76,padding:"4px 8px",fontSize:".78rem"}}
+                      value={b.amount} onChange={e=>updateBucket(b.id,"amount",Number(e.target.value)||0)}/>
+                    <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",whiteSpace:"nowrap"}}>{displayCurrency}/mo</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <input className="input" type="number" min="-20" max="50" step="0.5"
+                      style={{width:56,padding:"4px 8px",fontSize:".78rem"}}
+                      value={b.annRate} onChange={e=>updateBucket(b.id,"annRate",parseFloat(e.target.value)||0)}/>
+                    <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>% p.a.</span>
+                  </div>
+                  <button onClick={()=>removeBucket(b.id)}
+                    style={{background:"none",border:"none",cursor:"pointer",color:"var(--muted)",fontSize:"1rem",lineHeight:1,padding:"0 4px"}}>×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
+              <button className="btn btn-ghost btn-xs" onClick={addBucket}>+ add bucket</button>
+              {buckets.length>0&&(
+                <span style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                  Total: {fmt(bucketTotal,displayCurrency,true)}/mo
+                  {cfNet!=null&&<span style={{marginLeft:4,color:cfNet-bucketTotal>=0?"var(--pos)":"var(--neg)"}}>
+                    ({cfNet-bucketTotal>=0?"+":""}{fmt(cfNet-bucketTotal,displayCurrency,true)} buffer)
+                  </span>}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── inflation ── */}
+        <div style={{marginTop:12,borderTop:"1px solid var(--border)",paddingTop:12,display:"flex",alignItems:"flex-start",gap:16,flexWrap:"wrap"}}>
+          <div style={{flex:"0 0 auto"}}>
+            <div className="label" style={{marginBottom:4}}>Inflation rate</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input className="input" type="number" min="0" max="30" step="0.1"
+                style={{width:64,padding:"4px 8px",fontSize:".8rem"}}
+                value={inflInput} onChange={e=>setInflInput(e.target.value)}/>
+              <span style={{fontSize:".75rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>%</span>
+              <button className="btn btn-ghost btn-xs"
+                disabled={inflFetching}
+                onClick={()=>doFetchInfl(false)}
+                title="Fetch country CPI from World Bank">
+                {inflFetching?"…":"↓ auto"}
+              </button>
+              {displayCurrency==="GBP"&&(
+                <button className="btn btn-ghost btn-xs"
+                  disabled={inflFetching}
+                  onClick={()=>doFetchInfl(true)}
+                  title="Fetch London CPIH from ONS">
+                  {inflFetching?"…":"↓ London"}
+                </button>
+              )}
+            </div>
+            {inflSource&&(
+              <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:3}}>
+                Source: {inflSource.label} ({inflSource.value.toFixed(1)}%)
+              </div>
+            )}
+          </div>
+          <div style={{flex:"1 1 auto",display:"flex",alignItems:"center",gap:8,marginTop:20}}>
+            <button className="btn btn-ghost btn-xs"
+              style={showRealTerms?{borderColor:"var(--gold)",color:"var(--gold)"}:{}}
+              onClick={()=>setShowRealTerms(s=>!s)}>
+              {showRealTerms?"real terms ✓":"nominal"}
+            </button>
+            {showRealTerms&&(
+              <span style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>
+                Chart shows purchasing power in today's money
+              </span>
             )}
           </div>
         </div>
@@ -2298,11 +2522,16 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
         </div>
         {showScenarios&&(
           <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap"}}>
-            {[["var(--neg)","Pessimistic",annRate-band],["var(--gold)","Base",annRate],["var(--pos)","Optimistic",annRate+band]].map(([c,l,r])=>(
+            {[["var(--neg)","Pessimistic",effectiveRate-band],["var(--gold)","Base",effectiveRate],["var(--pos)","Optimistic",effectiveRate+band]].map(([c,l,r])=>(
               <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
                 <div className="scenario-dot" style={{background:c}}/>
                 <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted2)"}}>
-                  {l}: {(r*100).toFixed(1)}% → {fmt(projectNW(currentNW,r,monthly,months).at(-1),displayCurrency,true)}
+                  {l}: {(r*100).toFixed(1)}% → {fmt(
+                    showBreakdown&&effectiveBuckets.length>0
+                      ? projectNWMulti(currentNW,r,effectiveBuckets,months).at(-1)
+                      : projectNW(currentNW,r,effectiveMonthly,months).at(-1),
+                    displayCurrency,true
+                  )}
                 </span>
               </div>
             ))}
@@ -2313,20 +2542,22 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
       {/* ── summary stats ── */}
       <div className="model-card">
         {/* top row: projected value / total contributed / spending buffer */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom: tgtStats.length>0?16:0}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:(tgtStats.length>0||bucketStats.length>0)?16:0}}>
           <div>
-            <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>In {months<12?`${months}mo`:`${months/12}y`}</div>
+            <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>
+              In {months<12?`${months}mo`:`${months/12}y`}{showRealTerms&&" (real)"}
+            </div>
             <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--gold)",marginTop:2}}>{fmt(base.at(-1),displayCurrency)}</div>
             <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
               {base.at(-1)>currentNW?`+${fmt(base.at(-1)-currentNW,displayCurrency,true)} gain`:"No growth"}
             </div>
           </div>
-          {monthly>0&&(
+          {effectiveMonthly>0&&(
             <div>
               <div style={{fontSize:".62rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".08em",textTransform:"uppercase"}}>Total contributed</div>
-              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--text)",marginTop:2}}>{fmt(monthly*months,displayCurrency,true)}</div>
+              <div style={{fontSize:"1.1rem",fontFamily:"var(--fd)",color:"var(--text)",marginTop:2}}>{fmt(effectiveMonthly*months,displayCurrency,true)}</div>
               <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
-                {fmt(monthly,displayCurrency,true)}/mo × {months}mo
+                {fmt(effectiveMonthly,displayCurrency,true)}/mo × {months}mo
               </div>
             </div>
           )}
@@ -2337,11 +2568,46 @@ function ModelPage({ currentNW, targets, historicalRate, displayCurrency, netMon
                 {fmt(remainingCf,displayCurrency,true)}/mo
               </div>
               <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
-                after {cfPct}% invested
+                after investing {fmt(effectiveMonthly,displayCurrency,true)}/mo
               </div>
             </div>
           )}
         </div>
+
+        {/* per-bucket breakdown */}
+        {showBreakdown&&bucketStats.length>0&&(
+          <div style={{borderTop:"1px solid var(--border)",paddingTop:12,marginBottom:tgtStats.length>0?16:0}}>
+            <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Contribution breakdown in {months<12?`${months}mo`:`${months/12}y`}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {bucketStats.map(b=>(
+                <div key={b.id} style={{
+                  display:"grid",gridTemplateColumns:"1fr auto auto auto",alignItems:"center",
+                  gap:10,padding:"7px 10px",borderRadius:8,
+                  background:"var(--s2)",border:"1px solid var(--border2)",
+                }}>
+                  <div>
+                    <div style={{fontSize:".75rem",fontFamily:"var(--fd)",color:"var(--text)"}}>{b.name||"Unnamed bucket"}</div>
+                    <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
+                      {fmt(b.amount,displayCurrency,true)}/mo · {b.annRate.toFixed(1)}% p.a.
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Contributed</div>
+                    <div style={{fontSize:".72rem",fontFamily:"var(--fd)",color:"var(--text)",marginTop:1}}>{fmt(b.contrib,displayCurrency,true)}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>FV of contribs</div>
+                    <div style={{fontSize:".72rem",fontFamily:"var(--fd)",color:"var(--gold)",marginTop:1}}>{fmt(b.fv,displayCurrency,true)}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>Return</div>
+                    <div style={{fontSize:".72rem",fontFamily:"var(--fd)",color:"var(--pos)",marginTop:1}}>+{fmt(b.gain,displayCurrency,true)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* per-target table */}
         {tgtStats.length>0&&(
