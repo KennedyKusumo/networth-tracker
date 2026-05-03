@@ -2153,13 +2153,18 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
   const bucketTotal = buckets.reduce((s,b) => s + (b.amount||0), 0);
   const effectiveMonthly = showBreakdown && buckets.length > 0 ? bucketTotal : monthly;
 
-  const addBucket = () => setBuckets(prev => [...prev, { id: uid(), name: "", amount: 0, annRate: 5 }]);
+  const addBucket = () => setBuckets(prev => [...prev, { id: uid(), accountId: "", amount: 0 }]);
   const updateBucket = (id, key, val) => setBuckets(prev => prev.map(b => b.id===id ? {...b, [key]:val} : b));
   const removeBucket = id => setBuckets(prev => prev.filter(b => b.id!==id));
 
   useEffect(() => {
     if (showBreakdown && buckets.length > 0) setMonthly(bucketTotal);
   }, [showBreakdown, bucketTotal]);
+
+  const bucketsWithRate = useMemo(() => buckets.map(b => {
+    const acc = (accounts||[]).find(a => a.id === b.accountId);
+    return { ...b, annRate: Number(acc?.growthRate) || 0, name: acc?.name || "" };
+  }), [buckets, accounts]);
 
   // ── inflation (app-wide, synced via prop) ──────────────────
   const [inflInput, setInflInput] = useState(() => String(inflationRate));
@@ -2262,27 +2267,27 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
   // Long horizon (1200 mo) used only for target "time to reach" stats
   const projLong = useMemo(() =>
     accountSnapshots.length > 0
-      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], 1200, 0, inflAdjPct)
+      ? projectFullNW(accountSnapshots, showBreakdown ? bucketsWithRate : [], 1200, 0, inflAdjPct)
       : null,
-  [accountSnapshots, buckets, showBreakdown, inflAdjPct]);
+  [accountSnapshots, bucketsWithRate, showBreakdown, inflAdjPct]);
 
   const base = useMemo(() =>
     accountSnapshots.length > 0
-      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], months, 0, inflAdjPct)
+      ? projectFullNW(accountSnapshots, showBreakdown ? bucketsWithRate : [], months, 0, inflAdjPct)
       : projectNW(currentNW, 0, effectiveMonthly, months),
-  [accountSnapshots, buckets, showBreakdown, months, inflAdjPct, currentNW, effectiveMonthly]);
+  [accountSnapshots, bucketsWithRate, showBreakdown, months, inflAdjPct, currentNW, effectiveMonthly]);
 
   const pess = useMemo(() =>
     showScenarios && accountSnapshots.length > 0
-      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], months, -1, inflAdjPct)
+      ? projectFullNW(accountSnapshots, showBreakdown ? bucketsWithRate : [], months, -1, inflAdjPct)
       : null,
-  [accountSnapshots, buckets, showBreakdown, months, showScenarios, inflAdjPct]);
+  [accountSnapshots, bucketsWithRate, showBreakdown, months, showScenarios, inflAdjPct]);
 
   const opti = useMemo(() =>
     showScenarios && accountSnapshots.length > 0
-      ? projectFullNW(accountSnapshots, showBreakdown ? buckets : [], months, +1, inflAdjPct)
+      ? projectFullNW(accountSnapshots, showBreakdown ? bucketsWithRate : [], months, +1, inflAdjPct)
       : null,
-  [accountSnapshots, buckets, showBreakdown, months, showScenarios, inflAdjPct]);
+  [accountSnapshots, bucketsWithRate, showBreakdown, months, showScenarios, inflAdjPct]);
 
   // per-target stats — moToReach uses projLong; reqRate uses blended-rate approximation
   const tgtStats = useMemo(() => activeTargets.map(t => {
@@ -2302,12 +2307,12 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
   }), [activeTargets, projLong, currentNW, effectiveMonthly, inflPct]);
 
   // per-bucket projected gain from contributions at horizon
-  const bucketStats = useMemo(() => buckets.map(b => {
+  const bucketStats = useMemo(() => bucketsWithRate.map(b => {
     const mr = (1 + (b.annRate - inflAdjPct) / 100) ** (1/12) - 1;
     const fv = mr !== 0 ? b.amount * ((1+mr)**months - 1) / mr : b.amount * months;
     const contrib = b.amount * months;
     return { ...b, fv, contrib, gain: fv - contrib };
-  }), [buckets, months, inflAdjPct]);
+  }), [bucketsWithRate, months, inflAdjPct]);
 
   // SVG chart
   const tgtValues = activeTargets.map(t=>Number(t.amount));
@@ -2440,27 +2445,30 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
           <div style={{marginTop:12,borderTop:"1px solid var(--border)",paddingTop:12}}>
             <div style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",letterSpacing:".06em",textTransform:"uppercase",marginBottom:8}}>Contribution breakdown</div>
             <div style={{display:"flex",flexDirection:"column",gap:6}}>
-              {buckets.map((b,idx)=>(
-                <div key={b.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto",gap:6,alignItems:"center"}}>
-                  <input className="input" placeholder={`Bucket ${idx+1} (e.g. Stocks ISA)`}
+              {buckets.map((b)=>{
+                const selAcc = (accounts||[]).find(a => a.id === b.accountId);
+                return (
+                <div key={b.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:6,alignItems:"center"}}>
+                  <select className="input"
                     style={{padding:"4px 8px",fontSize:".78rem"}}
-                    value={b.name} onChange={e=>updateBucket(b.id,"name",e.target.value)}/>
+                    value={b.accountId} onChange={e=>updateBucket(b.id,"accountId",e.target.value)}>
+                    <option value="">— select account —</option>
+                    {(accounts||[]).map(a=>(
+                      <option key={a.id} value={a.id}>
+                        {a.name}{(Number(a.growthRate)||0)!==0?` · ${(Number(a.growthRate)).toFixed(1)}% p.a.`:""}
+                      </option>
+                    ))}
+                  </select>
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
                     <input className="input" type="number" min="0" step="50"
                       style={{width:76,padding:"4px 8px",fontSize:".78rem"}}
                       value={b.amount} onChange={e=>updateBucket(b.id,"amount",Number(e.target.value)||0)}/>
                     <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)",whiteSpace:"nowrap"}}>{displayCurrency}/mo</span>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <input className="input" type="number" min="-20" max="50" step="0.5"
-                      style={{width:56,padding:"4px 8px",fontSize:".78rem"}}
-                      value={b.annRate} onChange={e=>updateBucket(b.id,"annRate",parseFloat(e.target.value)||0)}/>
-                    <span style={{fontSize:".65rem",fontFamily:"var(--fm)",color:"var(--muted)"}}>% p.a.</span>
-                  </div>
                   <button onClick={()=>removeBucket(b.id)}
                     style={{background:"none",border:"none",cursor:"pointer",color:"var(--muted)",fontSize:"1rem",lineHeight:1,padding:"0 4px"}}>×</button>
                 </div>
-              ))}
+              );})}
             </div>
             <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
               <button className="btn btn-ghost btn-xs" onClick={addBucket}>+ add bucket</button>
@@ -2706,7 +2714,7 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
                   background:"var(--s2)",border:"1px solid var(--border2)",
                 }}>
                   <div>
-                    <div style={{fontSize:".75rem",fontFamily:"var(--fd)",color:"var(--text)"}}>{b.name||"Unnamed bucket"}</div>
+                    <div style={{fontSize:".75rem",fontFamily:"var(--fd)",color:"var(--text)"}}>{b.name||"No account selected"}</div>
                     <div style={{fontSize:".6rem",fontFamily:"var(--fm)",color:"var(--muted)",marginTop:1}}>
                       {fmt(b.amount,displayCurrency,true)}/mo · {b.annRate.toFixed(1)}% p.a.
                     </div>
