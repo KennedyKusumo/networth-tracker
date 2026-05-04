@@ -3189,10 +3189,8 @@ function CashflowPage({ cashflows, displayCurrency, toDisplay, onAdd, onUpdate, 
 // ─────────────────────────────────────────────────────────────
 //  ROOT APP
 // ─────────────────────────────────────────────────────────────
-const IS_LOCAL_DEV = import.meta.env.DEV;
-
 export default function App() {
-  const [idToken, setIdToken] = useState(() => IS_LOCAL_DEV ? 'local-dev' : getStoredAuth());
+  const [idToken, setIdToken] = useState(getStoredAuth);
   const [gsiReady, setGsiReady] = useState(false);
   const tokenRef = useRef(null);
   const hasAutoConnected = useRef(false);
@@ -3221,10 +3219,9 @@ export default function App() {
   const api = useRef(null);
   const vestingRef = useRef({});
 
-  useEffect(() => { tokenRef.current = IS_LOCAL_DEV ? 'nw-local-dev-kjk-2025' : idToken; }, [idToken]);
+  useEffect(() => { tokenRef.current = idToken; }, [idToken]);
 
   useEffect(() => {
-    if (IS_LOCAL_DEV) return;
     const init = () => {
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
@@ -3251,7 +3248,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!idToken || IS_LOCAL_DEV) return;
+    if (!idToken) return;
     const touch = () => {
       const s = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
       if (s) localStorage.setItem(AUTH_KEY, JSON.stringify({ ...s, lastActive: Date.now() }));
