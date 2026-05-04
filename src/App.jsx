@@ -2170,7 +2170,7 @@ const solveRequiredRate = (start, monthlyContrib, target, months) => {
 // ─────────────────────────────────────────────────────────────
 //  MODEL PAGE  (Phase 3 · What-If)
 // ─────────────────────────────────────────────────────────────
-function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historicalRate, displayCurrency, inflationRate, onSaveInflation, netMonthlyCashflow }) {
+function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historicalRate, displayCurrency, inflationRate, onSaveInflation, bucketConfig, onSaveBuckets, netMonthlyCashflow }) {
   const cfNet = netMonthlyCashflow!=null ? Math.max(0, netMonthlyCashflow) : null;
   const [cfPct, setCfPct] = useState(50);
   const cfDefault = cfNet!=null ? Math.round(cfNet * 0.5) : 0;
@@ -2182,8 +2182,8 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
   const [tipMonth, setTipMonth] = useState(null);
 
   // ── contribution breakdown ─────────────────────────────────
-  const [showBreakdown, setShowBreakdown] = useState(false);
-  const [buckets, setBuckets] = useState([]);
+  const [showBreakdown, setShowBreakdown] = useState(() => bucketConfig?.showBreakdown ?? false);
+  const [buckets, setBuckets] = useState(() => bucketConfig?.buckets ?? []);
 
   const bucketTotal = buckets.reduce((s,b) => s + (b.amount||0), 0);
   const effectiveMonthly = showBreakdown && buckets.length > 0 ? bucketTotal : monthly;
@@ -2195,6 +2195,13 @@ function ModelPage({ accounts, excluded, toDisplay, currentNW, targets, historic
   useEffect(() => {
     if (showBreakdown && buckets.length > 0) setMonthly(bucketTotal);
   }, [showBreakdown, bucketTotal]);
+
+  // Persist breakdown config to Google Sheet Settings (debounced)
+  useEffect(() => {
+    if (!onSaveBuckets) return;
+    const t = setTimeout(() => onSaveBuckets({ buckets, showBreakdown }), 800);
+    return () => clearTimeout(t);
+  }, [buckets, showBreakdown]);
 
   const bucketsWithRate = useMemo(() => buckets.map(b => {
     const acc = (accounts||[]).find(a => a.id === b.accountId);
@@ -3209,6 +3216,7 @@ export default function App() {
   const [baselineId, setBaselineId] = useState(null);
   const [displayCurrency, setDisplayCurrency] = useState("GBP");
   const [inflationRate, setInflationRate] = useState(2.0);
+  const [modelBuckets, setModelBuckets] = useState(null);
   const [excluded, setExcluded] = useState(new Set());
   const [rates, setRates] = useState({});
   const [ratesError, setRatesError] = useState(null);
@@ -3286,6 +3294,7 @@ export default function App() {
       if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
       try { if (data.settings?.growthTarget) setGrowthTarget(JSON.parse(data.settings.growthTarget)); } catch {}
       if (data.settings?.inflationRate) setInflationRate(Number(data.settings.inflationRate));
+      try { if (data.settings?.modelBuckets) setModelBuckets(JSON.parse(data.settings.modelBuckets)); } catch {}
       setLastSync(Date.now());
     } catch(e) { setSyncErr(e.message); }
     setSyncing(false);
@@ -3308,6 +3317,7 @@ export default function App() {
       if (data.settings?.excluded) setExcluded(new Set(data.settings.excluded));
       if (data.settings?.accountOrder) setAccountOrder(data.settings.accountOrder);
       try { if (data.settings?.growthTarget) setGrowthTarget(JSON.parse(data.settings.growthTarget)); } catch {}
+      try { if (data.settings?.modelBuckets) setModelBuckets(JSON.parse(data.settings.modelBuckets)); } catch {}
       localStorage.setItem("nw_api_url", url);
       setApiUrl(url);
       setConnected(true);
@@ -3487,6 +3497,11 @@ export default function App() {
     try { await api.current.call("setSetting", {key:"inflationRate", value:String(rate)}); }
     catch(e){ showToast("Sync error: "+e.message,"err"); }
   };
+  const saveModelBuckets = async (config) => {
+    setModelBuckets(config);
+    try { await api.current.call("setSetting", {key:"modelBuckets", value:JSON.stringify(config)}); }
+    catch(e){ showToast("Sync error: "+e.message,"err"); }
+  };
   const updateMilestoneLabel = async (id, label) => {
     const m=milestones.find(m=>m.id===id);
     setMilestones(p=>p.map(x=>x.id===id?{...x,label}:x));
@@ -3580,7 +3595,7 @@ export default function App() {
             {page==="accounts"&&<AccountsPage accounts={accounts} displayCurrency={displayCurrency} toDisplay={toDisplay} excluded={excluded} onToggleExcluded={toggleExcluded} onAdd={addAccount} onUpdate={updateAccount} onDelete={deleteAccount} onRecord={addRecord} onDeleteRecord={deleteRecord} accountOrder={accountOrder} onReorder={reorderAccounts}/>}
             {page==="milestones"&&<MilestonesPage milestones={milestones} baselineId={baselineId} displayCurrency={displayCurrency} toDisplay={toDisplay} onDelete={deleteMilestone} onSetBaseline={setBaseline} onUpdateLabel={updateMilestoneLabel}/>}
             {page==="targets"&&<TargetsPage targets={targets} displayCurrency={displayCurrency} toDisplay={toDisplay} currentNW={currentNW} inflationRate={inflationRate} onAdd={addTarget} onUpdate={updateTarget} onDelete={deleteTarget}/>}
-            {page==="model"&&<ModelPage accounts={accounts} excluded={excluded} toDisplay={toDisplay} currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency} inflationRate={inflationRate} onSaveInflation={saveInflationRate} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
+            {page==="model"&&<ModelPage accounts={accounts} excluded={excluded} toDisplay={toDisplay} currentNW={currentNW} targets={targets} historicalRate={historicalRate} displayCurrency={displayCurrency} inflationRate={inflationRate} onSaveInflation={saveInflationRate} bucketConfig={modelBuckets} onSaveBuckets={saveModelBuckets} netMonthlyCashflow={cashflows.length?netMonthlyCashflow:null}/>}
             {page==="cash"&&<CashflowPage cashflows={cashflows} displayCurrency={displayCurrency} toDisplay={toDisplay} onAdd={addCashflow} onUpdate={updateCashflow} onDelete={deleteCashflow}/>}
           </>;
         })()}
